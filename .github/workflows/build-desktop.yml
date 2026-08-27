@@ -83,6 +83,37 @@ jobs:
         run: |
           packaging/build-linux-packages.sh "${VERSION#v}" "${PWD}/appimagetool.AppImage"
 
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: hypotaxis-linux-packages
+          path: |
+            dist/linux-packages/*.deb
+            dist/linux-packages/*.rpm
+            dist/linux-packages/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  linux-flatpak:
+    name: Build Flatpak
+    runs-on: ubuntu-22.04
+    needs: build
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      options: --privileged
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download Linux PyInstaller executable
+        uses: actions/download-artifact@v4
+        with:
+          name: hypotaxis-linux
+          path: dist
+
+      - name: Configure Flathub remote
+        run: flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+
       - name: Prepare Flatpak bundle input
         run: |
           mkdir -p dist/flatpak-root
@@ -98,15 +129,11 @@ jobs:
           cache-key: flatpak-builder-${{ github.sha }}
           upload-artifact: false
 
-      - name: Upload Linux packages
+      - name: Upload Flatpak package
         uses: actions/upload-artifact@v4
         with:
-          name: hypotaxis-linux-packages
-          path: |
-            dist/linux-packages/*.deb
-            dist/linux-packages/*.rpm
-            dist/linux-packages/*.AppImage
-            dist/Hypotaxis.flatpak
+          name: hypotaxis-flatpak
+          path: dist/Hypotaxis.flatpak
           if-no-files-found: error
           retention-days: 14
 
