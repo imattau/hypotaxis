@@ -3,5 +3,6 @@ Type=Application
 Name=Hypotaxis
 Comment=Local manga production studio
 Exec=hypotaxis
+Icon=hypotaxis
 Terminal=false
-Categories=Graphics;Office;
+Categories=Graphics;

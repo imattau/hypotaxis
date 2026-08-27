@@ -88,6 +88,7 @@ jobs:
           mkdir -p dist/flatpak-root
           cp dist/hypotaxis dist/flatpak-root/hypotaxis
           cp packaging/hypotaxis.desktop dist/flatpak-root/io.github.imattau.Hypotaxis.desktop
+          cp packaging/hypotaxis.svg dist/flatpak-root/hypotaxis.svg
 
       - name: Build Flatpak bundle
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
