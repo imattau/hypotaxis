@@ -633,6 +633,12 @@ function renderGeneratePanel(storyId) {
           <input type="number" id="g-scale" value="0.6" min="0" max="1" step="0.05" />
         </div>
       </div>
+      <label><input type="checkbox" id="g-force" style="width:auto;display:inline-block;margin-right:6px;" />Regenerate existing pages too</label>
+      <div class="status-line">
+        Off by default: a page whose image already exists on disk is reused rather than
+        redrawn, so a job that stopped partway (a crash, an out-of-memory error) can be
+        resumed by clicking Generate Pages again instead of starting over from page one.
+      </div>
       <button class="btn" id="g-submit">Generate Pages</button>
       <div class="status-line" id="g-status"></div>
     </div>
@@ -646,6 +652,7 @@ async function startGeneration(storyId) {
   const steps = parseInt(document.getElementById("g-steps").value, 10);
   const use_identity_adapter = document.getElementById("g-adapter").value === "true";
   const identity_adapter_scale = parseFloat(document.getElementById("g-scale").value);
+  const force = document.getElementById("g-force").checked;
   const status = document.getElementById("g-status");
   const button = document.getElementById("g-submit");
 
@@ -657,7 +664,7 @@ async function startGeneration(storyId) {
     const { job_id } = await api(`/api/stories/${storyId}/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ backend, steps, use_identity_adapter, identity_adapter_scale }),
+      body: JSON.stringify({ backend, steps, use_identity_adapter, identity_adapter_scale, force }),
     });
     pollJob(job_id, storyId, status, button);
   } catch (e) {

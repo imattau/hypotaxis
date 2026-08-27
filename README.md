@@ -67,6 +67,11 @@ correct it by hand (wrong caption, misattributed speaker, a tag that should or s
 there) without re-running the whole adaptation step. Character/location/prop sheets also have
 a delete button per entry, for pruning a name automatic detection got wrong.
 
+Page generation is resumable: a page whose image already exists on disk is reused rather
+than redrawn, so a job that stops partway (an out-of-memory error, a crash) can be continued
+by clicking "Generate Pages" again instead of redoing every page from the start. Check
+"Regenerate existing pages too" to force a clean redo instead.
+
 **Command line**, the same two stages the UI drives:
 
 ```bash

@@ -484,9 +484,10 @@ class GenerateRequest(BaseModel):
     guidance_scale: float = Field(1.0, ge=0, le=30)
     use_identity_adapter: bool = True
     identity_adapter_scale: float = Field(0.6, ge=0, le=2)
+    force: bool = False
 
 
-def _run_generation_job(job_id: str, story: Story, cfg: PipelineConfig) -> None:
+def _run_generation_job(job_id: str, story: Story, cfg: PipelineConfig, force: bool) -> None:
     job = _jobs[job_id]
     job["status"] = "running"
 
@@ -494,7 +495,7 @@ def _run_generation_job(job_id: str, story: Story, cfg: PipelineConfig) -> None:
         job["message"] = msg
 
     try:
-        pdf_path = run_pipeline(story, cfg, on_progress=on_progress)
+        pdf_path = run_pipeline(story, cfg, on_progress=on_progress, force=force)
         _finish_job(job, "done")
         job["pdf_url"] = f"/output/{story.id}/{Path(pdf_path).name}"
     except Exception as e:  # noqa: BLE001
@@ -523,7 +524,7 @@ def generate(story_id: str, req: GenerateRequest):
     )
 
     job_id = _create_job()
-    thread = threading.Thread(target=_run_generation_job, args=(job_id, story, cfg), daemon=True)
+    thread = threading.Thread(target=_run_generation_job, args=(job_id, story, cfg, req.force), daemon=True)
     thread.start()
     return {"job_id": job_id}
 

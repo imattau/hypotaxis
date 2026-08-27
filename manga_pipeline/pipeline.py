@@ -44,10 +44,38 @@ def prepare_cast(
     report("done")
 
 
-def run(story: Story, cfg: PipelineConfig, on_progress: "Callable[[str], None] | None" = None) -> Path:
+def run(
+    story: Story,
+    cfg: PipelineConfig,
+    on_progress: "Callable[[str], None] | None" = None,
+    force: bool = False,
+) -> Path:
+    """force=False (the default) makes this resumable: a page whose PNG
+    already exists on disk is loaded rather than regenerated. Page
+    generation is the single most expensive, most crash-prone step in the
+    pipeline (real GPU time, real risk of OOM on the modest hardware this
+    project targets) - without this, a job that dies on page 12 of 17
+    forces a full from-scratch redo of the 11 pages that already succeeded.
+    Panels within a page are still always generated together (no per-panel
+    resume): compose_page/render_bubbles need the whole set at once, and a
+    single page's worth of GPU work is small enough that re-doing it isn't
+    the expensive part. Pass force=True for a deliberate "regenerate
+    everything" request.
+    """
+
     def report(msg: str) -> None:
         if on_progress is not None:
             on_progress(msg)
+
+    # validate every page's layout up front, before spending any GPU time -
+    # previously this was only checked as each page was reached, so a bad
+    # page late in a long story wasted all the GPU work on the pages before it
+    for page_index, page in enumerate(story.pages):
+        expected = panel_count(page.layout)
+        if len(page.panels) != expected:
+            raise ValueError(
+                f"page {page_index}: layout '{page.layout}' expects {expected} panels, got {len(page.panels)}"
+            )
 
     backend = build_backend(cfg)
     size = (cfg.page_width, cfg.page_height)
@@ -66,13 +94,13 @@ def run(story: Story, cfg: PipelineConfig, on_progress: "Callable[[str], None] |
 
     page_images: list[Image.Image] = []
     for page_index, page in enumerate(story.pages):
-        report(f"generating page {page_index + 1}/{len(story.pages)}")
-        expected = panel_count(page.layout)
-        if len(page.panels) != expected:
-            raise ValueError(
-                f"page {page_index}: layout '{page.layout}' expects {expected} panels, got {len(page.panels)}"
-            )
+        page_path = out_dir / f"page_{page_index:02d}.png"
+        if not force and page_path.exists():
+            report(f"page {page_index + 1}/{len(story.pages)} already generated, skipping")
+            page_images.append(Image.open(page_path).convert("RGB"))
+            continue
 
+        report(f"generating page {page_index + 1}/{len(story.pages)}")
         boxes = boxes_for(page.layout)
         panel_images = [
             backend.generate_panel(
@@ -91,8 +119,6 @@ def run(story: Story, cfg: PipelineConfig, on_progress: "Callable[[str], None] |
         ]
         composed = compose_page(page.layout, panel_images, size)
         final = render_bubbles(composed, page, size)
-
-        page_path = out_dir / f"page_{page_index:02d}.png"
         final.save(page_path)
         page_images.append(final)
 
