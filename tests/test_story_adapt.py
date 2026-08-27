@@ -21,7 +21,7 @@ from manga_pipeline.story_adapt import (
     parse_location_profiles,
     split_dialogue,
 )
-from manga_pipeline.schema import Panel
+from manga_pipeline.schema import DialogueLine, Panel
 
 
 def test_normalize_quotes_converts_curly_to_straight():
@@ -190,3 +190,44 @@ def test_split_dialogue_window_does_not_bleed_into_prior_quote_content():
     # quote) - it should fall back to a genuine "no signal" default
     # (last_speaker), not be hijacked into "Nova".
     assert lines[1].speaker != "Nova"
+
+
+def test_split_dialogue_detects_italicized_thought():
+    chunk = "Jules almost said, *Or loving me.* But she didn't."
+    doc = get_nlp()(chunk)
+    lines = split_dialogue(chunk, ["Jules", "Nova"], default_speaker="Nova", doc=doc)
+    assert lines == [DialogueLine(speaker="Jules", text="Or loving me.", kind="thought")]
+
+
+def test_split_dialogue_thought_verb_with_propn_subject():
+    chunk = "Jules thought, *This can't be real.*"
+    doc = get_nlp()(chunk)
+    lines = split_dialogue(chunk, ["Jules", "Nova"], default_speaker="Nova", doc=doc)
+    assert lines == [DialogueLine(speaker="Jules", text="This can't be real.", kind="thought")]
+
+
+def test_split_dialogue_does_not_mistake_bold_for_a_thought():
+    chunk = "This is **bold** text, not a thought."
+    doc = get_nlp()(chunk)
+    assert split_dialogue(chunk, [], doc=doc) == []
+
+
+def test_split_dialogue_italicized_quote_is_not_double_counted():
+    # italics wrapped *around* a quote is emphasis on spoken dialogue, not
+    # a separate unspoken thought - this must produce exactly one line, not
+    # a duplicate "speech" + "thought" pair for the same text
+    chunk = _normalize_quotes("Nova’s presence quivered like light. *“I’ve always seen you.”*")
+    doc = get_nlp()(chunk)
+    lines = split_dialogue(chunk, ["Jules", "Nova"], default_speaker="Jules", doc=doc)
+    assert len(lines) == 1
+    assert lines[0].kind == "speech"
+    assert lines[0].text == "I've always seen you."
+
+
+def test_split_dialogue_interleaves_speech_and_thought_by_position():
+    chunk = 'Aiko whispered, "Are you there?" *He never answers,* she thought.'
+    doc = get_nlp()(chunk)
+    lines = split_dialogue(chunk, ["Aiko", "Ren"], default_speaker="Aiko", doc=doc)
+    assert [l.kind for l in lines] == ["speech", "thought"]
+    assert lines[0].text == "Are you there?"
+    assert lines[1].text == "He never answers,"

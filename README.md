@@ -137,6 +137,12 @@ honestly rather than papered over:
 - spaCy's NER (character detection) has blind spots for names outside its training
   distribution — notably under-recognizing some non-Western names, which matters for a
   manga-focused tool. The character profiles feature is the current mitigation.
+- Markdown-italicized text (`*like this*`) is treated as an internal thought (rendered as a
+  thought bubble instead of a speech bubble), attributed via the same speaker-resolution
+  pipeline as quoted dialogue. Prose italicizes plenty of things that aren't a thought too —
+  a title, reported speech, emphasis — so this is a heuristic, not a guarantee; a length
+  filter (3+ words) cuts the clearest false positives (single emphasized words, short
+  titles) but can't tell a genuine thought from italicized reported speech.
 - Cross-page character identity consistency (Stage B) is a real, visible improvement over
   text-only conditioning but not perfect — an anime-tuned IP-Adapter or per-character LoRA
   would likely close the remaining gap.

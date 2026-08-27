@@ -15,7 +15,7 @@ from .schema import DialogueLine, Page, Panel, Story
 _REPORTING_VERBS = {
     "say", "ask", "reply", "whisper", "shout", "call", "murmur", "mutter", "cry",
     "yell", "answer", "continue", "add", "admit", "insist", "wonder", "exclaim",
-    "snap", "sigh", "respond", "declare", "protest", "note", "observe",
+    "snap", "sigh", "respond", "declare", "protest", "note", "observe", "think",
 }
 
 _TEMPLATES_BY_COUNT: dict[int, list[str]] = {}
@@ -299,6 +299,12 @@ characters_in_chunk = names_in_chunk
 
 _QUOTE_RE = re.compile(r'"([^"]+)"')
 
+# markdown-italicized text ("*Or loving me.*") as an internal-thought marker -
+# the negative lookaround on both sides excludes **bold** (double asterisks),
+# which is emphasis, not the single-asterisk italic convention prose uses for
+# a character's unspoken thought
+_THOUGHT_RE = re.compile(r"(?<!\*)\*(?!\*)([^*\n]+)(?<!\*)\*(?!\*)")
+
 _QUOTE_NORMALIZE_TABLE = str.maketrans({
     "“": '"',  # left double quotation mark
     "”": '"',  # right double quotation mark
@@ -409,19 +415,49 @@ def split_dialogue(
     # programmed.") and that shouldn't erase the record of who the other
     # active participant is for ping-pong alternation below
     other_speaker: str | None = None
-    prior_quote_spans: list[tuple[int, int]] = []
-    for match in _QUOTE_RE.finditer(chunk):
+    prior_spans: list[tuple[int, int]] = []
+
+    # speech (quoted) and thought (markdown-italicized, e.g. "*Or loving
+    # me.*") spans are interleaved by position and run through the same
+    # speaker-resolution pipeline - a thought's speaker is attributed
+    # exactly the same grammatical way a quote's is ("Jules almost said,
+    # *Or loving me.*" resolves via the same reporting-verb check)
+    quote_matches = list(_QUOTE_RE.finditer(chunk))
+    thought_matches = [
+        m
+        for m in _THOUGHT_RE.finditer(chunk)
+        # italics wrapped *around* a quote ("*"I've always seen you."*") is
+        # emphasis on spoken dialogue, not a separate unspoken thought -
+        # without this, prose that italicizes a line of spoken dialogue for
+        # emphasis produced two duplicate bubbles for the same line
+        if not any(m.start() < q.end() and q.start() < m.end() for q in quote_matches)
+        # prose italicizes plenty of things that aren't a character's
+        # internal thought - a single emphasized word ("the way she said
+        # *love*"), a painting/room title ("*Resonance*", "*Continuum*").
+        # A real thought is a sentence-like fragment, not one bare word -
+        # this cheap filter isn't perfect (it can't catch multi-word titles,
+        # and won't tell a genuine thought from italicized reported speech)
+        # but it removes the clearest false-positive class.
+        and len(m.group(1).split()) >= 3
+    ]
+    matches = sorted(
+        [(m, "speech") for m in quote_matches] + [(m, "thought") for m in thought_matches],
+        key=lambda pair: pair[0].start(),
+    )
+
+    for match, kind in matches:
         text = match.group(1).strip()
         speaker = None
         if doc is not None:
             speaker = _resolve_speaker_via_parse(doc, match.start(), match.end(), characters)
         if speaker is None:
-            # never look further back than the immediately preceding quote -
-            # a name attached to an earlier beat ("Jules shrugged.") is that
-            # beat's attribution cue, not a floating cue that should keep
-            # bleeding forward into every later quote within 40 chars of it
-            prior_quote_end = prior_quote_spans[-1][1] if prior_quote_spans else 0
-            window_start = max(prior_quote_end, match.start() - 40)
+            # never look further back than the immediately preceding
+            # speech/thought span - a name attached to an earlier beat
+            # ("Jules shrugged.") is that beat's attribution cue, not a
+            # floating cue that should keep bleeding forward into every
+            # later line within 40 chars of it
+            prior_end = prior_spans[-1][1] if prior_spans else 0
+            window_start = max(prior_end, match.start() - 40)
             window = chunk[window_start : match.start()]
             speaker = next((name for name in reversed(characters) if name in window), None)
         if speaker is None and other_speaker is not None:
@@ -434,8 +470,8 @@ def split_dialogue(
             speaker = other_speaker
         if speaker is None:
             speaker = last_speaker
-        lines.append(DialogueLine(speaker=speaker, text=text, kind="speech"))
-        prior_quote_spans.append((match.start(), match.end()))
+        lines.append(DialogueLine(speaker=speaker, text=text, kind=kind))
+        prior_spans.append((match.start(), match.end()))
         if speaker != last_speaker:
             other_speaker = last_speaker
         last_speaker = speaker
@@ -636,7 +672,7 @@ def adapt_story(
                 {"input": caption_input, "characters": characters, "target": caption},
             )
 
-        chunk_doc = get_nlp()(chunk) if '"' in chunk else None
+        chunk_doc = get_nlp()(chunk) if ('"' in chunk or _THOUGHT_RE.search(chunk)) else None
         dialogue = split_dialogue(chunk, characters, default_speaker=last_speaker, doc=chunk_doc)
         if characters:
             last_speaker = characters[-1]
