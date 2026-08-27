@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Hypotaxis
+Comment=Local manga production studio
+Exec=hypotaxis
+Terminal=false
+Categories=Graphics;Office;

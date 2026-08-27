@@ -47,3 +47,119 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 14
+
+  linux-packages:
+    name: Build Linux packages
+    runs-on: ubuntu-22.04
+    needs: build
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev rpm flatpak flatpak-builder desktop-file-utils
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-desktop.txt
+
+      - name: Build PyInstaller executable
+        run: python -m PyInstaller --clean --noconfirm hypotaxis.spec
+
+      - name: Download AppImage tool
+        run: |
+          curl --fail --location --output appimagetool.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool.AppImage
+
+      - name: Build deb, rpm, and AppImage
+        env:
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '0.0.0' }}
+        run: |
+          packaging/build-linux-packages.sh "${VERSION#v}" "${PWD}/appimagetool.AppImage"
+
+      - name: Prepare Flatpak bundle input
+        run: |
+          mkdir -p dist/flatpak-root
+          cp dist/hypotaxis dist/flatpak-root/hypotaxis
+          cp packaging/hypotaxis.desktop dist/flatpak-root/io.github.imattau.Hypotaxis.desktop
+
+      - name: Build Flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: dist/Hypotaxis.flatpak
+          manifest-path: flatpak/io.github.imattau.Hypotaxis.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+          upload-artifact: false
+
+      - name: Upload Linux packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: hypotaxis-linux-packages
+          path: |
+            dist/linux-packages/*.deb
+            dist/linux-packages/*.rpm
+            dist/linux-packages/*.AppImage
+            dist/Hypotaxis.flatpak
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-linux-repositories:
+    name: Publish Debian and RPM repositories
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    needs: linux-packages
+    permissions:
+      contents: read
+    steps:
+      - name: Check out application source
+        uses: actions/checkout@v4
+
+      - name: Download Linux packages
+        uses: actions/download-artifact@v4
+        with:
+          name: hypotaxis-linux-packages
+          path: packages
+
+      - name: Check distribution repository configuration
+        env:
+          DISTRIBUTION_REPO_TOKEN: ${{ secrets.DISTRIBUTION_REPO_TOKEN }}
+        run: test -n "${DISTRIBUTION_REPO_TOKEN}"
+
+      - name: Check out distribution repository
+        uses: actions/checkout@v4
+        with:
+          repository: imattau/hypotaxis-distribution
+          token: ${{ secrets.DISTRIBUTION_REPO_TOKEN }}
+          path: distribution
+
+      - name: Build repository indexes
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev apt-utils createrepo-c
+          mkdir -p distribution/deb/pool/main distribution/deb/dists/stable/main/binary-amd64 distribution/rpm
+          cp packages/*.deb distribution/deb/pool/main/
+          cp packages/*.rpm distribution/rpm/
+          (cd distribution/deb && dpkg-scanpackages pool /dev/null | gzip -9c > dists/stable/main/binary-amd64/Packages.gz)
+          (cd distribution/deb && apt-ftparchive release dists/stable > dists/stable/Release)
+          createrepo_c --update distribution/rpm
+          cat > distribution/index.html <<'EOF'
+          <!doctype html><title>Hypotaxis packages</title>
+          <h1>Hypotaxis packages</h1>
+          <p><a href="deb/">APT repository</a> · <a href="rpm/">RPM repository</a></p>
+          EOF
+
+      - name: Publish distribution repository
+        working-directory: distribution
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add deb rpm index.html
+          git diff --cached --quiet || git commit -m "Publish Hypotaxis ${GITHUB_REF_NAME} packages"
+          git push
