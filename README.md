@@ -9,7 +9,7 @@ required cloud APIs.
 
 | Stage | What it does | Key tech |
 |---|---|---|
-| **A — Story Adaptation** | Prose → structured Story JSON script (panels, dialogue, camera hints) | sentence embeddings for scene segmentation, LexRank (networkx) for panel-budget compression, spaCy NER + dependency parsing for characters/speaker attribution, a small local LLM (Qwen2.5-3B-Instruct by default) for panel captions |
+| **A — Story Adaptation** | Prose → structured Story JSON script (panels, dialogue, camera hints) | sentence embeddings for scene segmentation, LexRank (networkx) for panel-budget compression, spaCy NER + dependency parsing for characters/speaker attribution, a small local LLM (Qwen2.5-3B-Instruct by default) for panel captions and content-aware camera framing |
 | **B — Character/Location/Prop Identity** | Persistent visual identity for characters and recurring locations; consistent wording for recurring props | characters/locations: text registry + IP-Adapter reference images, two simultaneous slots so a panel can be conditioned on a character and a setting at once. Props: text-anchored into the generation prompt only — image-conditioning a whole panel on a close-up of a small object distorts the rest of the composition |
 | **C — Generation** | Each panel generated independently at its own aspect ratio, then composed into a page | SDXL / SDXL-Turbo via `diffusers`, text2img per panel |
 | **D — Assembly** | Panels → laid-out page → dialogue bubbles → PDF | Pillow, deterministic, no model |
@@ -134,7 +134,7 @@ conflict, since text-anchoring doesn't compete for an IP-Adapter slot.
 This is an active prototype, not a finished product. Known limitations are tracked
 honestly rather than papered over:
 
-- The Stage A caption LLM (3B by default) still sometimes hallucinates content not in the source text on passages with little concrete visual detail, though noticeably less than the 0.5B model it replaced.
+- The Stage A caption LLM (3B by default) still sometimes hallucinates content not in the source text on passages with little concrete visual detail, though noticeably less than the 0.5B model it replaced. It also occasionally echoes its own prompt instructions back as if they were caption text (a known small-model failure mode) - a sanitization pass catches and strips the clearest cases (leaked instruction phrases, invented screenplay-style scene slugs) before the caption ever reaches image generation, but this is a guard against the worst outcomes, not a guarantee the model never misbehaves.
 - Dialogue speaker attribution can't resolve pure-pronoun cases ("he called out") without
   coreference resolution, which isn't wired in (the well-known libraries for this —
   `coreferee`, `spacy-experimental`, `BookNLP` — are all currently incompatible with a

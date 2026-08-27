@@ -13,6 +13,8 @@ from __future__ import annotations
 from manga_pipeline.story_adapt import (
     _merge_person_aliases,
     _normalize_quotes,
+    _parse_caption_response,
+    _sanitize_caption,
     _split_on_scene_breaks,
     _strip_markdown_structure,
     get_nlp,
@@ -116,6 +118,65 @@ def test_parse_character_profiles_ignores_comments_and_blank_lines():
 def test_parse_location_profiles_shares_generic_format():
     profiles = parse_location_profiles("Mill: old wooden watermill beside a river")
     assert profiles == {"Mill": "old wooden watermill beside a river"}
+
+
+def test_sanitize_caption_strips_leaked_prompt_instructions():
+    # reproduces the exact malformed response a real 3B-model run produced
+    # on a real manuscript panel - the model echoed its own instructions
+    # back as if they were caption content
+    bad = (
+        "EXT. WIDE ESTABLISHING SHOT: A room bathed in silence, the air heavy with "
+        "anticipation following a soft pause. One sentence, under 25 words, describing "
+        "only the setting, action, and expression stated in the passage. Do not invent "
+        "objects, locations, or events not in the passage. Do not include dialogue. "
+        "Do not add characters not listed."
+    )
+    cleaned = _sanitize_caption(bad)
+    assert cleaned == "A room bathed in silence, the air heavy with anticipation following a soft pause."
+    assert "do not invent" not in cleaned.lower()
+    assert "EXT." not in cleaned
+
+
+def test_sanitize_caption_leaves_clean_caption_untouched():
+    clean = "Jules stares out the window, her expression distant."
+    assert _sanitize_caption(clean) == clean
+
+
+def test_sanitize_caption_never_returns_empty():
+    # if the leak marker is at the very start, there's no sentence left to
+    # back up to - must fall back to the original text rather than produce
+    # an empty caption that would break Panel/generation downstream
+    assert _sanitize_caption("Do not invent anything at all.") != ""
+
+
+def test_parse_caption_response_well_formed():
+    response = "CAPTION: Jules stares out the window.\nCAMERA: close-up"
+    caption, camera = _parse_caption_response(response, "chunk text", 1)
+    assert caption == "Jules stares out the window."
+    assert camera == "close-up"
+
+
+def test_parse_caption_response_missing_caption_prefix():
+    # a 3B model doesn't always follow the two-line format exactly - an
+    # unprefixed line must still be treated as caption text, not dropped
+    response = "Jules stares out the window.\nCAMERA: wide two-shot"
+    caption, camera = _parse_caption_response(response, "chunk text", 2)
+    assert caption == "Jules stares out the window."
+    assert camera == "wide two-shot"
+
+
+def test_parse_caption_response_unknown_camera_falls_back_to_heuristic():
+    response = "CAPTION: Jules stares out the window.\nCAMERA: dutch angle drone shot"
+    caption, camera = _parse_caption_response(response, "she stood in the room", 1)
+    assert caption == "Jules stares out the window."
+    assert camera == guess_camera_hint("she stood in the room", 1)
+
+
+def test_parse_caption_response_missing_camera_line_falls_back_to_heuristic():
+    response = "CAPTION: Jules stares out the window."
+    caption, camera = _parse_caption_response(response, "she stood in the room", 1)
+    assert caption == "Jules stares out the window."
+    assert camera == guess_camera_hint("she stood in the room", 1)
 
 
 def test_guess_camera_hint_close_up_keyword():
