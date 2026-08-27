@@ -10,3 +10,7 @@ models/
 .venv/
 venv/
 *.egg-info/
+
+# private test content (adult/personal manuscript, kept local-only)
+stories/soft_reset*.json
+registry/soft_reset*.json
