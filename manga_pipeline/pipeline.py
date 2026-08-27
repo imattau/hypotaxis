@@ -37,7 +37,7 @@ def run(story: Story, cfg: PipelineConfig, on_progress: "Callable[[str], None] |
                 f"page {page_index}: layout '{page.layout}' expects {expected} panels, got {len(page.panels)}"
             )
 
-        base = backend.generate_base(story.id, page_index, page, size, story.style_prompt)
+        base = backend.generate_base(story.id, page_index, page, size, story.style_prompt, registry)
         boxes = boxes_for(page.layout)
         panel_images = [
             backend.edit_panel(

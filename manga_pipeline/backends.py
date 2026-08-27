@@ -18,6 +18,19 @@ def _seed_for(story_id: str, page_index: int, panel_index: int = -1) -> int:
     return int(hashlib.sha256(key.encode()).hexdigest()[:8], 16)
 
 
+def _dominant_character(page: Page) -> str | None:
+    """Character appearing in the most panels on this page, or None if the
+    page has no characters at all. Used to identity-condition the page's
+    base image itself, not just the per-panel edits."""
+    counts: dict[str, int] = {}
+    for panel in page.panels:
+        for name in panel.characters:
+            counts[name] = counts.get(name, 0) + 1
+    if not counts:
+        return None
+    return max(counts, key=counts.get)
+
+
 class ImageBackend(ABC):
     def prepare_characters(self, story_id: str, registry: CharacterRegistry, style_prompt: str) -> None:
         """Generate/refresh any per-character identity assets (Stage B) up
@@ -31,7 +44,13 @@ class ImageBackend(ABC):
 
     @abstractmethod
     def generate_base(
-        self, story_id: str, page_index: int, page: Page, size: tuple[int, int], style_prompt: str
+        self,
+        story_id: str,
+        page_index: int,
+        page: Page,
+        size: tuple[int, int],
+        style_prompt: str,
+        registry: CharacterRegistry | None,
     ) -> Image.Image: ...
 
     @abstractmethod
@@ -54,7 +73,13 @@ class MockBackend(ImageBackend):
     """
 
     def generate_base(
-        self, story_id: str, page_index: int, page: Page, size: tuple[int, int], style_prompt: str
+        self,
+        story_id: str,
+        page_index: int,
+        page: Page,
+        size: tuple[int, int],
+        style_prompt: str,
+        registry: CharacterRegistry | None,
     ) -> Image.Image:
         seed = _seed_for(story_id, page_index)
         hue = seed % 360
@@ -210,7 +235,13 @@ class DiffusersBackend(ImageBackend):
         return image
 
     def generate_base(
-        self, story_id: str, page_index: int, page: Page, size: tuple[int, int], style_prompt: str
+        self,
+        story_id: str,
+        page_index: int,
+        page: Page,
+        size: tuple[int, int],
+        style_prompt: str,
+        registry: CharacterRegistry | None,
     ) -> Image.Image:
         self._load()
         import torch
@@ -219,6 +250,20 @@ class DiffusersBackend(ImageBackend):
         generator = torch.Generator(device=self.cfg.device).manual_seed(seed)
         scene = page.panels[0].scene_description if page.panels else "manga page"
         prompt = f"{style_prompt}, {scene}" if style_prompt else scene
+
+        # identity-condition the base image on the page's dominant character too,
+        # not just the per-panel edits - previously the base started from zero
+        # identity signal each page, so the per-panel edit had to pull the
+        # generated art all the way to the reference identity on its own, which
+        # is a large part of why cross-page consistency stayed weak even with
+        # the adapter active on edit_panel (see Phase 4 test results)
+        dominant = _dominant_character(page)
+        if registry is not None and dominant is not None:
+            ref_image = self._reference_image(dominant, story_id, style_prompt, registry)
+            ip_kwargs = self._ip_kwargs(self._base_pipe, ref_image, self.cfg.identity_adapter_scale)
+        else:
+            ip_kwargs = self._ip_kwargs(self._base_pipe, None, 0.0)
+
         result = self._base_pipe(
             prompt=prompt,
             num_inference_steps=self.cfg.steps,
@@ -226,7 +271,7 @@ class DiffusersBackend(ImageBackend):
             width=size[0],
             height=size[1],
             generator=generator,
-            **self._ip_kwargs(self._base_pipe, None, 0.0),
+            **ip_kwargs,
         )
         return result.images[0]
 
