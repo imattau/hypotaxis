@@ -21,7 +21,7 @@ jobs:
             artifact: hypotaxis-linux
           - os: windows-2022
             artifact: hypotaxis-windows
-          - os: macos-13
+          - os: macos-15-intel
             artifact: hypotaxis-macos
 
     steps:
@@ -51,7 +51,6 @@ jobs:
   linux-packages:
     name: Build Linux packages
     runs-on: ubuntu-22.04
-    needs: build
     steps:
       - name: Check out source
         uses: actions/checkout@v4
