@@ -1,0 +1,104 @@
+{
+  "id": "signal_lost",
+  "title": "Signal Lost",
+  "style_prompt": "monochrome manga, screentone shading",
+  "pages": [
+    {
+      "layout": "H3",
+      "panels": [
+        {
+          "scene_description": "Captain Reyes, floating weightlessly on the observation deck, watches static with a serene expression as he observes the comms display.",
+          "characters": [
+            "Reyes"
+          ],
+          "camera_hint": "close-up",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The station's eerie silence echoes through the empty halls, punctuated by distant car horns and the faint hum of trains, creating a haunting atmosphere that draws the viewer in.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The warning lights flickered on in the dimly lit room, casting eerie red shadows that danced across the woman's face as she sat silently, lost in thought.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    },
+    {
+      "layout": "V3",
+      "panels": [
+        {
+          "scene_description": "Petra, with her short, curly black hair and simple white t-shirt and dark jeans, pulls herself through the hatch, her magnetic boots clashing against the deck plating as she navigates the ship's machinery.",
+          "characters": [
+            "Petra"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The reactor coupling is stained with grease on one side, as if someone has worked there diligently. The scene depicts a character in a lab setting, likely a scientist or engineer, engaged in their work. The character's face shows no visible signs of distress or emotion, but rather a focused and industrious",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "Petra, with her short, curly black hair and simple white t-shirt and dark jeans, stands at the relay station, her face contorted in disbelief as she hears the news of the failed race.",
+          "characters": [
+            "Petra"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Petra",
+              "text": "The relay's fried,",
+              "kind": "speech"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "layout": "H12",
+      "panels": [
+        {
+          "scene_description": "Reyes' Captain Reyes floats weightlessly in the main array, his sleek white shirt and jeans giving him a lean, muscular appearance.",
+          "characters": [
+            "Reyes"
+          ],
+          "camera_hint": "close-up",
+          "dialogue": [
+            {
+              "speaker": "Reyes",
+              "text": "We're not getting a signal out through the main array.",
+              "kind": "speech"
+            }
+          ]
+        },
+        {
+          "scene_description": "The scene unfolds in a quiet, dimly lit room, with a lone figure using a makeshift transmitter to communicate with her team. The background is a stark, industrial setting, emphasizing the urgency of their mission. The character's expression is one of determination and focus as they work together to transmit vital information",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Reyes",
+              "text": "Then we use the backup transmitter,",
+              "kind": "speech"
+            }
+          ]
+        },
+        {
+          "scene_description": "The digital world is bustling with excitement as characters gather on their screens, ready to share their latest creations and connect with others in the virtual realm. Petra, with her short, curly black hair and simple white t-shirt and dark jeans, pushes off from the corridor as she navigates through the bustling city.",
+          "characters": [
+            "Petra"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    }
+  ]
+}

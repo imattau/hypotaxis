@@ -1,0 +1,22 @@
+{
+  "Kessa": {
+    "name": "Kessa",
+    "description": "Kessa stands tall with short, curly hair and wears loose-fitting, cargo pants. Her build is lean and muscular.",
+    "reference_image": ""
+  },
+  "Bram": {
+    "name": "Bram",
+    "description": "Bram has short, dark hair and wears a casual, worn-out shirt and jeans.",
+    "reference_image": ""
+  },
+  "Ilsa": {
+    "name": "Ilsa",
+    "description": "Ilsa is described as having short, curly hair and wearing a simple white shirt and jeans.",
+    "reference_image": ""
+  },
+  "Uncle": {
+    "name": "Uncle",
+    "description": "Uncle Bram has short, dark hair and wears a worn, tattered shirt and trousers. His build is lean and muscular.",
+    "reference_image": ""
+  }
+}

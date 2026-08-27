@@ -1,0 +1,12 @@
+{
+  "Sora": {
+    "name": "Sora",
+    "description": "Sora has short, curly black hair and wears a simple white tunic with a red belt around his waist. His build is lean and muscular.",
+    "reference_image": ""
+  },
+  "Torvald": {
+    "name": "Torvald",
+    "description": "Torvald has short, curly black hair and wears a simple white shirt and blue jeans.",
+    "reference_image": ""
+  }
+}

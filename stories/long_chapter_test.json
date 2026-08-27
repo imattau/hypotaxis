@@ -1,0 +1,214 @@
+{
+  "id": "long_chapter_test",
+  "title": "The Flood",
+  "style_prompt": "monochrome manga, screentone shading",
+  "pages": [
+    {
+      "layout": "H3",
+      "panels": [
+        {
+          "scene_description": "The raindrops fall heavily on the river, creating a chaotic scene where the old stone railings rise nearly to the edge of the market square. Kessa watches helplessly as her uncle tries to move the last of his sacks across the flooded bridge.",
+          "characters": [
+            "Kessa",
+            "Bram",
+            "Uncle"
+          ],
+          "camera_hint": "wide two-shot",
+          "dialogue": [
+            {
+              "speaker": "Kessa",
+              "text": "Uncle, the west bridge is already underwater,",
+              "kind": "speech"
+            },
+            {
+              "speaker": "Kessa",
+              "text": "Then we go around,",
+              "kind": "speech"
+            },
+            {
+              "speaker": "Kessa",
+              "text": "Help me with this.",
+              "kind": "speech"
+            }
+          ]
+        },
+        {
+          "scene_description": "Kessa's stomach tightened as she stood in her cargo pants, her lean muscles visible against the backdrop of the bustling cityscape.",
+          "characters": [
+            "Kessa"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The scene depicts Kessa, dressed in cargo pants and cargo shorts, running through the flooded mill area, while her mother, Ilsa, struggles to free a length of rope from the broken sluice gate.",
+          "characters": [
+            "Kessa",
+            "Bram",
+            "Ilsa"
+          ],
+          "camera_hint": "wide two-shot",
+          "dialogue": [
+            {
+              "speaker": "Bram",
+              "text": "Go,",
+              "kind": "speech"
+            },
+            {
+              "speaker": "Bram",
+              "text": "I can manage the cart alone. Go find your mother.",
+              "kind": "speech"
+            },
+            {
+              "speaker": "Bram",
+              "text": "Kessa!",
+              "kind": "speech"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "layout": "V3",
+      "panels": [
+        {
+          "scene_description": "A desperate Kessa struggles to climb a crumbling ladder as the water threatens to wash away her makeshift platform.",
+          "characters": [
+            "Kessa"
+          ],
+          "camera_hint": "wide establishing shot",
+          "dialogue": [
+            {
+              "speaker": "Ilsa",
+              "text": "The ladder's gone, the water took it!",
+              "kind": "speech"
+            }
+          ]
+        },
+        {
+          "scene_description": "The old grain chute, standing against the far wall, is being dragged through the rising water, creating a makeshift ramp for the image generator to use in its manga panel creation process.",
+          "characters": [],
+          "camera_hint": "wide establishing shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The character's body is heavy and strained against the support of the ground, its movements slow and deliberate despite the effort.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    },
+    {
+      "layout": "H12",
+      "panels": [
+        {
+          "scene_description": "The scene unfolds in a damp, crowded train station, with Ilsa standing on the platform, her body shivering from cold water, while the other passengers look on in disbelief at her desperate attempt to reach safety.",
+          "characters": [
+            "Ilsa"
+          ],
+          "camera_hint": "wide establishing shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "A tense scene unfolds as Kessa and Ilsa struggle against the weight of the water, their determination evident in their expressions as they stand on the edge of the supporting beam, contemplating the precarious situation before them.",
+          "characters": [
+            "Kessa",
+            "Ilsa"
+          ],
+          "camera_hint": "wide two-shot",
+          "dialogue": [
+            {
+              "speaker": "Kessa",
+              "text": "We can't stay here,",
+              "kind": "speech"
+            },
+            {
+              "speaker": "Kessa",
+              "text": "The whole structure could go.",
+              "kind": "speech"
+            }
+          ]
+        },
+        {
+          "scene_description": "The dry, challenging climb above is depicted in a serene landscape, with no visible characters or dynamic action. The setting is described as \"dry ground beyond,\" and there are no characters present. The scene focuses on the character's determination and the challenge of climbing without any obstacles.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    },
+    {
+      "layout": "H21",
+      "panels": [
+        {
+          "scene_description": "The platform, once stable, tilts dramatically as it moves slowly, its weight shifting uneasily.",
+          "characters": [],
+          "camera_hint": "wide establishing shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "In the bustling cityscape, Kessa, with her sleek black outfit and confident stance, navigates through the crowded streets while Ilsa, with her agile movements and sharp eyes, watches from a distance, ready to catch her off guard.",
+          "characters": [
+            "Kessa",
+            "Ilsa"
+          ],
+          "camera_hint": "wide two-shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "In the bustling city of Tokyo, Kessa, known for her quick wit and sharp mind, rushes through the crowded streets, her eyes scanning the faces around her as she navigates through the chaos of the neon-lit metropolis.",
+          "characters": [
+            "Kessa",
+            "Ilsa"
+          ],
+          "camera_hint": "wide two-shot",
+          "dialogue": [
+            {
+              "speaker": "Ilsa",
+              "text": "Kessa!",
+              "kind": "speech"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "layout": "V12",
+      "panels": [
+        {
+          "scene_description": "The scene unfolds in a damp alleyway, where Kessa's hands grip the chain of a vintage bicycle, its chains rusting beneath the relentless rain. The water cascades down from above, creating a chaotic pattern that catches the light, casting eerie shadows on the ground. Kessa's eyes,",
+          "characters": [
+            "Kessa"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The scene depicts Ilsa, with her short, curly hair and simple white shirt and jeans, hauled back onto the platform by her friend, holding onto each other in a moment of strength and trust.",
+          "characters": [
+            "Ilsa"
+          ],
+          "camera_hint": "wide establishing shot",
+          "dialogue": [
+            {
+              "speaker": "Ilsa",
+              "text": "Don't let go,",
+              "kind": "speech"
+            }
+          ]
+        },
+        {
+          "scene_description": "The narrow window at the end of the embankment, where the rain still falls, is now empty, symbolizing the end of the mill's operation and the beginning of a new era.",
+          "characters": [
+            "Kessa",
+            "Bram",
+            "Ilsa"
+          ],
+          "camera_hint": "close-up",
+          "dialogue": []
+        }
+      ]
+    }
+  ]
+}

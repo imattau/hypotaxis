@@ -1,0 +1,12 @@
+{
+  "Kaito": {
+    "name": "Kaito",
+    "description": "Kaito is a tall, muscular man with short, dark hair and a lean build.",
+    "reference_image": ""
+  },
+  "Mei": {
+    "name": "Mei",
+    "description": "Mei is a young woman with short, curly black hair and a slender build.",
+    "reference_image": ""
+  }
+}

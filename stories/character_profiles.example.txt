@@ -1,0 +1,19 @@
+# Character profile / cast sheet format
+#
+# One character per line: "Name: description"
+#   - Name must exactly match how the character is named in your prose
+#     (case-sensitive) - this is what gets matched against the story text.
+#   - Description should be a visual appearance description (hair, build,
+#     clothing, distinguishing features) - it seeds the character's Stage B
+#     registry entry directly and is used to generate their reference
+#     portrait, so keep it concrete and visual rather than personality-based.
+#   - Blank lines and lines starting with # (like this one) are ignored.
+#   - A description may contain colons - only the first colon on a line
+#     splits the name from the description.
+#
+# Listing a character here guarantees they are recognized throughout the
+# story regardless of what automatic name detection does or doesn't catch,
+# and skips the (sometimes unreliable) auto-generated appearance guess.
+
+Aiko: young woman, shoulder-length black bob haircut, tan raincoat, red satchel
+Ren: young man, short dark hair, casual jacket over a plain shirt

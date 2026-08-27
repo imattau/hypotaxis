@@ -1,0 +1,93 @@
+{
+  "id": "rooftop_promise",
+  "title": "Rooftop Promise",
+  "style_prompt": "monochrome manga, screentone shading",
+  "pages": [
+    {
+      "layout": "H3",
+      "panels": [
+        {
+          "scene_description": "Yuna, the protagonist, climbs the final rung of the fire escape, her breaths heavy as she reaches the rooftop.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The city's neon glow enveloped her as she navigated through its labyrinthine streets, lost in thought and adrift in the vast expanse of urban chaos.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The sun casts a warm glow over the tranquil lake, casting shadows on the calm waters below. A lone figure stands at the edge, her eyes fixed on the distant mountains, lost in thought as she reflects on the beauty of nature.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    },
+    {
+      "layout": "V3",
+      "panels": [
+        {
+          "scene_description": "Daichi is sitting on the water tower's steps, holding his knees up to his chest, awaiting the arrival of the boatman.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The lone figure stands motionless as he does not turn around when she approaches, leaving the viewer with a contemplative gaze.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The scene unfolds in a quiet caf\u00e9, with two strangers sitting at a table, their eyes locked on each other as they discuss their plans for the day.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "unknown",
+              "text": "I didn't think you'd actually come,",
+              "kind": "speech"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "layout": "H12",
+      "panels": [
+        {
+          "scene_description": "Yuna's eyes fixed on his face as he stared back, their gazes locked in a silent exchange.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The woman holds a folded piece of paper in her hand as she stands before a blank canvas, ready to begin drawing.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The serene landscape of a tranquil lake is bathed in soft morning light, casting gentle shadows on the water's surface. A lone figure stands at the edge, gazing out over the calm waters, her eyes reflecting the peacefulness of the scene before her. The serene landscape of a tranquil lake is bathed in soft sunlight, casting gentle shadows on the water's surface and reflecting the calmness of the scene. A lone figure stands at the edge, gazing out over the peaceful waters, their eyes filled with unwavering hope as they whisper,",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "unknown",
+              "text": "I made a promise,",
+              "kind": "speech"
+            },
+            {
+              "speaker": "unknown",
+              "text": "I keep my promises.",
+              "kind": "speech"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

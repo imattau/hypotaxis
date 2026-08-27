@@ -1,0 +1,104 @@
+{
+  "id": "forge_of_embers",
+  "title": "Forge of Embers",
+  "style_prompt": "monochrome manga, screentone shading",
+  "pages": [
+    {
+      "layout": "H3",
+      "panels": [
+        {
+          "scene_description": "The forge crackles as Sora, wielding a rusty sword, smashes through the final section of the blade, creating a brilliant flash of light that illuminates the entire room.",
+          "characters": [
+            "Sora"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The sweat dripping from her brow as she worked on the anvil, her fingers clenching and unclenching with each stroke.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The village elder stands at the edge of the snow-covered valley, her eyes fixed on the unfinished sword she has vowed to finish before the frost blankets the land. The cold air stirs in the wind, creating a stark contrast against the serene landscape.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    },
+    {
+      "layout": "V3",
+      "panels": [
+        {
+          "scene_description": "The old man, with his gnarled staff and heavy burden, stands in the forge doorway, leaning heavily on it as he works.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "In the serene forest, Torvald, a young man with short, curly black hair and a simple white shirt and blue jeans, stands at the edge of a clearing, watching as Sora, her eyes wide with wonder, approaches him from behind.",
+          "characters": [
+            "Torvald",
+            "Sora"
+          ],
+          "camera_hint": "wide two-shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The half-finished blade rests in the hands of the protagonist, its edges etched with symbols that hint at hidden secrets or unfinished work.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    },
+    {
+      "layout": "H12",
+      "panels": [
+        {
+          "scene_description": "The uneven edge of the wooden board catches Torvald's eye as he approaches, his mischievous grin spreading across his face.",
+          "characters": [
+            "Torvald"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Torvald",
+              "text": "The edge is uneven,",
+              "kind": "speech"
+            }
+          ]
+        },
+        {
+          "scene_description": "Sora's frustrated hammer set down, her long, curly black hair tied back in a messy bun, her eyes wide with anger as she stands alone in front of a cluttered workshop.",
+          "characters": [
+            "Sora"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "A small hammer is held by Torvald as he reaches out to fix something before it's too late.",
+          "characters": [
+            "Torvald"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Torvald",
+              "text": "Then teach me to fix it,",
+              "kind": "speech"
+            },
+            {
+              "speaker": "Torvald",
+              "text": "before it's too late.",
+              "kind": "speech"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

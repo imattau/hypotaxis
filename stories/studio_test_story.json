@@ -1,0 +1,69 @@
+{
+  "id": "studio_test_story",
+  "title": "The Studio Test",
+  "style_prompt": "dynamic shonen manga style, bold high-contrast linework, dense screentone, speed lines, dramatic angles",
+  "pages": [
+    {
+      "layout": "H3",
+      "panels": [
+        {
+          "scene_description": "Mira crouched behind crates, observing the guards' steady footsteps as they paced the warehouse floor.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The vault door creaked open with a soft click, revealing a lone figure standing at its threshold, her eyes scanning the room as she prepared to enter.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "A tall, striking woman named Oskar, known as Oskar, suddenly emerges from the shadows, startlingly surprising her.",
+          "characters": [
+            "Oskar"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    },
+    {
+      "layout": "V3",
+      "panels": [
+        {
+          "scene_description": "The tall, striking woman with long, dark hair and a lean, muscular build, Oskar, checks her watch as she approaches the bustling caf\u00e9, her eyes scanning the crowded room for any sign of her latecomer.",
+          "characters": [
+            "Oskar"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Oskar",
+              "text": "You're late,",
+              "kind": "speech"
+            }
+          ]
+        },
+        {
+          "scene_description": "Mira's eyes gleamed with determination as she extracted a small key from her pocket, ready to unlock the door of her secret chamber.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The scene unfolds in a quiet caf\u00e9, where two friends, Sarah and John, sit at a table, sipping coffee while chatting about their day. They exchange glances, both visibly engaged in their conversation.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Oskar",
+              "text": "Let's just get this over with,",
+              "kind": "speech"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

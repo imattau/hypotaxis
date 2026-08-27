@@ -1,0 +1,92 @@
+{
+  "id": "lantern_market",
+  "title": "Lantern Market",
+  "style_prompt": "monochrome manga, screentone shading",
+  "pages": [
+    {
+      "layout": "H3",
+      "panels": [
+        {
+          "scene_description": "Kaito, a towering figure with short, dark hair and a lean build, wades through the bustling night market, lanterns casting shadows on his face as he navigates the crowd of vendors and shoppers.",
+          "characters": [
+            "Kaito"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "A young man, clutching a small wooden box against his chest, looks over his shoulder as he navigates through a bustling city street.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "A woman selling roasted chestnuts called out to him, but he did not stop.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    },
+    {
+      "layout": "V3",
+      "panels": [
+        {
+          "scene_description": "At the far edge of the market, Mei waits beneath a paper lantern shaped like a carp, her long, wavy black hair cascading down her back as she gazes at the bustling crowd below.",
+          "characters": [
+            "Mei"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The lone figure stands motionless amidst the bustling crowd, her eyes fixed on nothing but the faces of those around her.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "As Kaito approached, he noticed her standing in the shadow of a stall, determined to catch her eye.",
+          "characters": [
+            "Kaito"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    },
+    {
+      "layout": "H12",
+      "panels": [
+        {
+          "scene_description": "The scene depicts a serene landscape with a lone figure standing in front of a tranquil pond, seemingly unaware of the hurried footsteps that have caught up with them. The character's expression is one of mild annoyance or resignation, as if they've been waiting for this moment for far too long.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Kaito",
+              "text": "You're late,",
+              "kind": "speech"
+            }
+          ]
+        },
+        {
+          "scene_description": "The wooden box, held by Kaito, stands in stark contrast against the backdrop of a dimly lit room filled with various objects, as he carefully examines its contents, his eyes narrowing with concentration.",
+          "characters": [
+            "Kaito"
+          ],
+          "camera_hint": "close-up",
+          "dialogue": []
+        },
+        {
+          "scene_description": "Mei's eyes widen as she opens the box, her face contorted in surprise and awe.",
+          "characters": [
+            "Mei"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    }
+  ]
+}

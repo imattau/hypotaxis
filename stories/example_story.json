@@ -1,0 +1,61 @@
+{
+  "id": "rain_letter",
+  "title": "The Letter in the Rain",
+  "style_prompt": "monochrome manga, screentone shading, dynamic ink linework",
+  "pages": [
+    {
+      "layout": "H12",
+      "panels": [
+        {
+          "scene_description": "Aiko stands alone on a rain-soaked train platform, clutching a folded letter.",
+          "characters": ["Aiko"],
+          "camera_hint": "wide establishing shot",
+          "dialogue": [
+            {"speaker": "narrator", "text": "Three years since she'd last read it.", "kind": "narration"}
+          ]
+        },
+        {
+          "scene_description": "Close on Aiko's hands trembling as she unfolds the damp paper.",
+          "characters": ["Aiko"],
+          "camera_hint": "close-up on hands",
+          "dialogue": []
+        },
+        {
+          "scene_description": "Aiko looks up sharply, eyes wide, as a train horn sounds in the distance.",
+          "characters": ["Aiko"],
+          "camera_hint": "medium shot, low angle",
+          "dialogue": [
+            {"speaker": "Aiko", "text": "That whistle...", "kind": "thought"}
+          ]
+        }
+      ]
+    },
+    {
+      "layout": "V21",
+      "panels": [
+        {
+          "scene_description": "A young man, Ren, steps off the arriving train, scanning the platform crowd.",
+          "characters": ["Ren"],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {"speaker": "Ren", "text": "Aiko?", "kind": "speech"}
+          ]
+        },
+        {
+          "scene_description": "Aiko freezes, letter still in hand, rain dripping from her hair.",
+          "characters": ["Aiko"],
+          "camera_hint": "close-up",
+          "dialogue": []
+        },
+        {
+          "scene_description": "Wide shot of Ren and Aiko facing each other across the platform, the whole station bustling around them.",
+          "characters": ["Aiko", "Ren"],
+          "camera_hint": "wide two-shot",
+          "dialogue": [
+            {"speaker": "Aiko", "text": "You came back.", "kind": "speech"}
+          ]
+        }
+      ]
+    }
+  ]
+}

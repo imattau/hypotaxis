@@ -1,0 +1,78 @@
+{
+  "id": "rain_letter_auto",
+  "title": "The Letter in the Rain",
+  "style_prompt": "monochrome manga, screentone shading",
+  "pages": [
+    {
+      "layout": "H3",
+      "panels": [
+        {
+          "scene_description": "Aiko stands alone on the rain-soaked train platform, clutching a folded letter, known as her companion and friend.",
+          "characters": [
+            "Aiko"
+          ],
+          "camera_hint": "wide establishing shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The serene landscape of a small village in the countryside, bathed in gentle sunlight, is captured with a tranquil scene where three young women sit on a bench, their eyes fixed intently on a distant tree, lost in thought as they listen to the rustling leaves and the soft breeze.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The scene unfolds as Aiko, her eyes wide with surprise, looks up from the damp paper, her hands trembling slightly as she scans the crowd on the platform, while Ren, his face obscured by the rain, steps off the approaching train.",
+          "characters": [
+            "Ren",
+            "Aiko"
+          ],
+          "camera_hint": "close-up",
+          "dialogue": [
+            {
+              "speaker": "Aiko",
+              "text": "That whistle,",
+              "kind": "speech"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "layout": "V3",
+      "panels": [
+        {
+          "scene_description": "Aiko, standing alone on a rainy platform, holds a folded letter with determination in her eyes as she waits for someone to recognize her.",
+          "characters": [
+            "Aiko"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Aiko",
+              "text": "Aiko?",
+              "kind": "speech"
+            }
+          ]
+        },
+        {
+          "scene_description": "The letter she held, now soaked with rain, lay in her hands as she stood frozen in mid-step, eyes wide with shock and determination.",
+          "characters": [],
+          "camera_hint": "close-up",
+          "dialogue": []
+        },
+        {
+          "scene_description": "A woman stands in a rain-soaked alley, her face obscured by tears as she returns home from work.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Aiko",
+              "text": "You came back,",
+              "kind": "speech"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

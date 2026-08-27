@@ -1,0 +1,10 @@
+sentence-transformers
+transformers
+torch
+networkx
+spacy
+# after installing, also fetch the small English model:
+#   python -m spacy download en_core_web_sm
+# (or, if that command is blocked by an externally-managed-environment error:
+#   pip install --user --break-system-packages <the en_core_web_sm wheel URL from
+#   https://github.com/explosion/spacy-models/releases>)

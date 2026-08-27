@@ -1,0 +1,83 @@
+{
+  "id": "classroom_window",
+  "title": "Classroom Window",
+  "style_prompt": "monochrome manga, screentone shading",
+  "pages": [
+    {
+      "layout": "H3",
+      "panels": [
+        {
+          "scene_description": "Haru stares out the classroom window, barely paying attention to the teacher's lecture, while Nozomi leans forward, tapping her pencil in contemplation.",
+          "characters": [
+            "Haru",
+            "Nozomi"
+          ],
+          "camera_hint": "wide two-shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The lone figure stands alone in the dimly lit alleyway, her eyes fixed on someone or something far away, as if searching for a glimpse of recognition.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The teacher stands in front of the class, her stern gaze fixed on the student who has been struggling with their work.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Nozomi",
+              "text": "You're going to fail the exam if you keep doing that,",
+              "kind": "speech"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "layout": "V3",
+      "panels": [
+        {
+          "scene_description": "Haru, a teenage boy with short messy black hair and a downcast expression, turns around slowly as he prepares to speak to someone.",
+          "characters": [
+            "Haru"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The quiet, contemplative figure in the background looks deeply engaged with his notebook, as if lost in thought or contemplating something important.",
+          "characters": [],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Haru",
+              "text": "I don't really care about the exam,",
+              "kind": "speech"
+            }
+          ]
+        },
+        {
+          "scene_description": "Nozomi, known as the \"Teenage Ninja\" in the story, is seated at a desk, flipping through her notebook while paying close attention to her friend's actions.",
+          "characters": [
+            "Nozomi"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": [
+            {
+              "speaker": "Haru",
+              "text": "Well, I do,",
+              "kind": "speech"
+            },
+            {
+              "speaker": "Haru",
+              "text": "So pay attention.",
+              "kind": "speech"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
