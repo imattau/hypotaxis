@@ -1,0 +1,19 @@
+app-id: io.github.imattau.Hypotaxis
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: hypotaxis
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --share=network
+modules:
+  - name: hypotaxis
+    buildsystem: simple
+    build-commands:
+      - install -D -m 0755 hypotaxis /app/bin/hypotaxis
+      - install -D -m 0644 io.github.imattau.Hypotaxis.desktop /app/share/applications/io.github.imattau.Hypotaxis.desktop
+    sources:
+      - type: dir
+        path: ../dist/flatpak-root

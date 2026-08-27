@@ -1,0 +1,3 @@
+-r requirements-studio.txt
+pywebview2
+pyinstaller
