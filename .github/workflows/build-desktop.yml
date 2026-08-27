@@ -1,0 +1,49 @@
+name: Build desktop applications
+
+on:
+  push:
+    branches: [master, "feature/**"]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            artifact: hypotaxis-linux
+          - os: windows-2022
+            artifact: hypotaxis-windows
+          - os: macos-13
+            artifact: hypotaxis-macos
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install build dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements-desktop.txt
+
+      - name: Build application
+        run: python -m PyInstaller --clean --noconfirm hypotaxis.spec
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
