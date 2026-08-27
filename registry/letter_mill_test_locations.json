@@ -1,0 +1,12 @@
+{
+  "Mill": {
+    "name": "Mill",
+    "description": "old wooden watermill beside a river, moss-covered walls, large wooden waterwheel",
+    "reference_image": "output/letter_mill_test/locations/Mill.png"
+  },
+  "Vault": {
+    "name": "Vault",
+    "description": "heavy steel bank vault door, dim warehouse lighting, stacked wooden crates nearby",
+    "reference_image": "output/letter_mill_test/locations/Vault.png"
+  }
+}

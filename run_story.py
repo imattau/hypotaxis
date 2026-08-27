@@ -12,7 +12,7 @@ def main() -> None:
     parser.add_argument("story", help="path to a Story JSON file")
     parser.add_argument("--backend", choices=["mock", "diffusers"], default="mock")
     parser.add_argument("--checkpoint", default="stabilityai/sdxl-turbo")
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--guidance-scale", type=float, default=1.0)
     parser.add_argument("--page-width", type=int, default=1024)

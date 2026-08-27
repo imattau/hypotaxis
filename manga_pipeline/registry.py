@@ -4,12 +4,15 @@ import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .config import atomic_write_text
+
 
 @dataclass
 class CharacterEntry:
     name: str
     description: str = ""
     reference_image: str = ""
+    is_abstract: bool = False
 
 
 class CharacterRegistry:
@@ -31,9 +34,9 @@ class CharacterRegistry:
         return self._entries.get(name)
 
     def set_description(self, name: str, description: str) -> None:
-        existing = self._entries.get(name)
-        reference_image = existing.reference_image if existing else ""
-        self._entries[name] = CharacterEntry(name=name, description=description, reference_image=reference_image)
+        existing = self._entries.get(name) or CharacterEntry(name=name)
+        existing.description = description
+        self._entries[name] = existing
         self._save()
 
     def set_reference_image(self, name: str, path: str) -> None:
@@ -42,10 +45,38 @@ class CharacterRegistry:
         self._entries[name] = existing
         self._save()
 
+    def set_is_abstract(self, name: str, value: bool = True) -> None:
+        """Marks a character as having no physical/humanoid appearance (an
+        AI, a voice, a presence) - see parse_character_profiles' "[no-form]"
+        tag. backends.py uses this to skip face/portrait reference-image
+        generation and IP-Adapter identity conditioning for this character
+        entirely, text-anchoring their description into the prompt instead,
+        the same way props are handled."""
+        existing = self._entries.get(name) or CharacterEntry(name=name)
+        existing.is_abstract = value
+        self._entries[name] = existing
+        self._save()
+
     def all(self) -> dict[str, CharacterEntry]:
         return dict(self._entries)
+
+    def delete(self, name: str) -> bool:
+        """Removes an entry entirely - e.g. a bogus name NER mistook for a
+        person/location/prop (see the pipeline review's alias-merging notes:
+        alias merging catches variant spellings of a real name, but not a
+        wrong entity-type call like mistaking a capitalized common noun for
+        a character - those need to be pruned manually). Returns whether
+        anything was actually removed. Does not touch reference_image files
+        on disk - the caller (studio API) decides whether to also delete
+        those, since a registry doesn't own that filesystem lifecycle.
+        """
+        if name not in self._entries:
+            return False
+        del self._entries[name]
+        self._save()
+        return True
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {name: asdict(entry) for name, entry in self._entries.items()}
-        self.path.write_text(json.dumps(data, indent=2))
+        atomic_write_text(self.path, json.dumps(data, indent=2) + "\n")

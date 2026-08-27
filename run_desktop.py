@@ -38,6 +38,9 @@ def main() -> None:
     parser.add_argument("--debug", action="store_true", help="enable WebView and Uvicorn debug logging")
     args = parser.parse_args()
 
+    if args.host not in {"127.0.0.1", "localhost", "::1"}:
+        parser.error("the desktop wrapper only supports loopback hosts")
+
     try:
         import uvicorn
         import webview

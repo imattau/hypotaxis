@@ -167,15 +167,29 @@ jobs:
           path: distribution
 
       - name: Build repository indexes
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y dpkg-dev apt-utils createrepo-c
+          sudo apt-get install -y dpkg-dev apt-utils createrepo-c gnupg
           mkdir -p distribution/deb/pool/main distribution/deb/dists/stable/main/binary-amd64 distribution/rpm
           cp packages/*.deb distribution/deb/pool/main/
           cp packages/*.rpm distribution/rpm/
           (cd distribution/deb && dpkg-scanpackages pool /dev/null | gzip -9c > dists/stable/main/binary-amd64/Packages.gz)
           (cd distribution/deb && apt-ftparchive release dists/stable > dists/stable/Release)
           createrepo_c --update distribution/rpm
+          export GNUPGHOME="${RUNNER_TEMP}/hypotaxis-gnupg"
+          mkdir -m 700 -p "${GNUPGHOME}"
+          printf '%s' "${GPG_PRIVATE_KEY}" | gpg --batch --import
+          gpg --batch --yes --pinentry-mode loopback --passphrase "${GPG_PASSPHRASE}" \
+            --local-user "${GPG_KEY_ID}" --detach-sign --armor \
+            --output distribution/deb/dists/stable/Release.gpg distribution/deb/dists/stable/Release
+          gpg --batch --yes --pinentry-mode loopback --passphrase "${GPG_PASSPHRASE}" \
+            --local-user "${GPG_KEY_ID}" --detach-sign --armor \
+            --output distribution/rpm/repomd.xml.asc distribution/rpm/repodata/repomd.xml
+          gpg --batch --armor --export "${GPG_KEY_ID}" > distribution/deb/hypotaxis-archive-keyring.asc
           cat > distribution/index.html <<'EOF'
           <!doctype html><title>Hypotaxis packages</title>
           <h1>Hypotaxis packages</h1>
@@ -190,3 +204,32 @@ jobs:
           git add deb rpm index.html
           git diff --cached --quiet || git commit -m "Publish Hypotaxis ${GITHUB_REF_NAME} packages"
           git push
+
+  release-assets:
+    name: Publish release assets
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    needs: [build, linux-packages, linux-flatpak]
+    permissions:
+      contents: write
+    steps:
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: hypotaxis-*
+          path: release-assets
+          merge-multiple: false
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "Hypotaxis ${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
+          find release-assets -type f -print0 | \
+            xargs -0 -r gh release upload "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" --clobber

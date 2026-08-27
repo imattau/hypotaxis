@@ -1,0 +1,192 @@
+"""Regression tests for the pure-logic pieces of Stage A (manga_pipeline/story_adapt.py).
+
+These lock in a series of real bugs found and fixed while testing the pipeline
+against an actual manuscript ("Soft Reset") - see the project's memory/commit
+history for the failure cases these were pulled from. Anything requiring the
+sentence-embedding model (segment_text, score_sentence_importance) is left
+untested here since it needs a network download; everything below only needs
+spaCy's en_core_web_sm, which the project already requires locally.
+"""
+
+from __future__ import annotations
+
+from manga_pipeline.story_adapt import (
+    _merge_person_aliases,
+    _normalize_quotes,
+    get_nlp,
+    guess_camera_hint,
+    names_in_chunk,
+    pack_into_pages,
+    parse_character_profiles,
+    parse_location_profiles,
+    split_dialogue,
+)
+from manga_pipeline.schema import Panel
+
+
+def test_normalize_quotes_converts_curly_to_straight():
+    text = "“Good morning, Jules,” Nova said. It’s a fine day."
+    normalized = _normalize_quotes(text)
+    assert '"Good morning, Jules,"' in normalized
+    assert "It's a fine day." in normalized
+    assert "“" not in normalized and "’" not in normalized
+
+
+def test_normalize_quotes_is_idempotent_on_plain_text():
+    text = 'Plain "already straight" text.'
+    assert _normalize_quotes(text) == text
+
+
+def test_merge_person_aliases_collapses_ner_variants():
+    names = ["Dr. Mina Park", "Mina Park's", "Park", "Jules", "Nova"]
+    canonical, aliases = _merge_person_aliases(names)
+    assert canonical == ["Dr. Mina Park", "Jules", "Nova"]
+    assert aliases == {"Mina Park": "Dr. Mina Park", "Park": "Dr. Mina Park"}
+
+
+def test_merge_person_aliases_prefers_priority_name_over_longer_ner_form():
+    # spaCy's PERSON span usually drops a leading title ("Dr."), so the raw
+    # NER hit ("Mina Park") is shorter than the profile-supplied canonical
+    # name ("Dr. Mina Park") - the profile name must still win.
+    names = ["Mina Park's", "Park"]
+    canonical, aliases = _merge_person_aliases(names, priority_names=["Dr. Mina Park"])
+    assert canonical == ["Dr. Mina Park"]
+    assert aliases == {"Mina Park": "Dr. Mina Park", "Park": "Dr. Mina Park"}
+
+
+def test_merge_person_aliases_no_false_merge_for_unrelated_names():
+    canonical, aliases = _merge_person_aliases(["Aiko", "Ren"])
+    assert canonical == ["Aiko", "Ren"]
+    assert aliases == {}
+
+
+def test_names_in_chunk_substring_match():
+    assert names_in_chunk("Kessa walked to the Mill.", ["Kessa", "Ren", "Mill"]) == ["Kessa", "Mill"]
+
+
+def test_parse_character_profiles_strips_no_form_tag():
+    text = "Nova: [no-form] no physical body; visualise only as light\nJules: young woman, dark hair"
+    profiles, abstract_names = parse_character_profiles(text)
+    assert profiles["Nova"] == "no physical body; visualise only as light"
+    assert profiles["Jules"] == "young woman, dark hair"
+    assert abstract_names == {"Nova"}
+
+
+def test_parse_character_profiles_ignores_comments_and_blank_lines():
+    text = "# a comment\n\nAiko: young woman, black bob haircut\n"
+    profiles, abstract_names = parse_character_profiles(text)
+    assert profiles == {"Aiko": "young woman, black bob haircut"}
+    assert abstract_names == set()
+
+
+def test_parse_location_profiles_shares_generic_format():
+    profiles = parse_location_profiles("Mill: old wooden watermill beside a river")
+    assert profiles == {"Mill": "old wooden watermill beside a river"}
+
+
+def test_guess_camera_hint_close_up_keyword():
+    assert guess_camera_hint("She looked at her hands.", 1) == "close-up"
+
+
+def test_guess_camera_hint_two_shot_for_multiple_characters():
+    assert guess_camera_hint("They stood together in the yard.", 2) == "wide two-shot"
+
+
+def test_pack_into_pages_assigns_supported_layout_sizes():
+    panels = [Panel(scene_description=f"panel {i}") for i in range(5)]
+    pages = pack_into_pages(panels)
+    total_panels = sum(len(p.panels) for p in pages)
+    assert total_panels == 5
+    for page in pages:
+        assert len(page.panels) in (2, 3)
+
+
+def test_pack_into_pages_rejects_too_short_story():
+    try:
+        pack_into_pages([Panel(scene_description="only one")])
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
+def test_split_dialogue_reporting_verb_in_own_sentence():
+    chunk = 'Aiko smiled. "Hello there."'
+    doc = get_nlp()(chunk)
+    lines = split_dialogue(chunk, ["Aiko", "Ren"], default_speaker="Aiko", doc=doc)
+    assert [l.speaker for l in lines] == ["Aiko"]
+
+
+def test_split_dialogue_prefers_reporting_verb_subject_over_nearest_name():
+    # the failure mode a nearest-name heuristic gets wrong: Ren is the
+    # speaker (subject of "called out"), but Aiko's name sits textually
+    # closer to the quote.
+    chunk = "Ren spotted her across the platform and called out. \"Aiko?\""
+    doc = get_nlp()(chunk)
+    lines = split_dialogue(chunk, ["Aiko", "Ren"], default_speaker="Ren", doc=doc)
+    assert [l.speaker for l in lines] == ["Ren"]
+
+
+def test_split_dialogue_action_beat_before_bare_quote():
+    # "shrugged" is not a reporting verb, so this only resolves via the
+    # adjacent-sentence fallback, not the same-sentence reporting-verb check.
+    chunk = 'Jules shrugged. "I dreamed."'
+    doc = get_nlp()(chunk)
+    lines = split_dialogue(chunk, ["Jules", "Nova"], default_speaker="Nova", doc=doc)
+    assert [l.speaker for l in lines] == ["Jules"]
+
+
+def test_split_dialogue_possessive_subject_of_action_beat():
+    # subject of "hovered" is "face" (a NOUN), with "Park" attached as a
+    # possessive modifier - the sentence is about the possessor, not the
+    # body part.
+    chunk = "Dr. Mina Park's face hovered in the corner of Jules' screen. \"Any changes in sleep?\""
+    doc = get_nlp()(chunk)
+    lines = split_dialogue(chunk, ["Jules", "Dr. Mina Park"], default_speaker="Jules", doc=doc)
+    assert [l.speaker for l in lines] == ["Dr. Mina Park"]
+
+
+def test_split_dialogue_full_exchange_matches_ground_truth():
+    """The exact 10-line Dr. Park / Jules exchange from the real manuscript
+    that originally triggered the speaker-attribution investigation - this
+    is the end-to-end regression test for all three bugs fixed together."""
+    chunk = _normalize_quotes(
+        "Later, Dr. Mina Park’s face hovered in the corner of Jules’ screen. "
+        '"Any changes in sleep? Mood?"\n\n'
+        'Jules shrugged. "I dreamed."\n\n'
+        '"That’s a change."\n\n'
+        '"I think Nova’s been weird."\n\n'
+        '"Weird?"\n\n'
+        '"She… she wrote a poem. Sort of."\n\n'
+        'Dr. Park smiled faintly. "Nova is programmed for linguistic adaptation. '
+        'Maybe she’s responding to your art style."\n\n'
+        '"Maybe." Jules hesitated. "It didn’t feel programmed."\n\n'
+        '"Then perhaps she’s learning you."'
+    )
+    doc = get_nlp()(chunk)
+    characters = ["Jules", "Nova", "Dr. Mina Park"]
+    lines = split_dialogue(chunk, characters, default_speaker="Jules", doc=doc)
+    assert [l.speaker for l in lines] == [
+        "Dr. Mina Park",
+        "Jules",
+        "Dr. Mina Park",
+        "Jules",
+        "Dr. Mina Park",
+        "Jules",
+        "Dr. Mina Park",
+        "Jules",
+        "Jules",
+        "Dr. Mina Park",
+    ]
+
+
+def test_split_dialogue_window_does_not_bleed_into_prior_quote_content():
+    # "Nova" appears inside Jules' own spoken line here - it must not hijack
+    # attribution for the very next (unrelated) quote.
+    chunk = '"I think Nova’s been weird." "Weird?"'
+    doc = get_nlp()(chunk)
+    lines = split_dialogue(chunk, ["Jules", "Nova", "Dr. Mina Park"], default_speaker="Jules", doc=doc)
+    # "Weird?" has no resolvable signal at all here (no beat, no reporting
+    # verb, and the window must not pick up "Nova" from inside the prior
+    # quote) - it should fall back to a genuine "no signal" default
+    # (last_speaker), not be hijacked into "Nova".
+    assert lines[1].speaker != "Nova"

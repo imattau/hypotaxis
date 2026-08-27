@@ -4,6 +4,8 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .config import atomic_write_text
+
 
 @dataclass
 class DialogueLine:
@@ -20,6 +22,8 @@ class DialogueLine:
 class Panel:
     scene_description: str
     characters: list[str] = field(default_factory=list)
+    locations: list[str] = field(default_factory=list)
+    props: list[str] = field(default_factory=list)
     camera_hint: str = "medium shot"
     dialogue: list[DialogueLine] = field(default_factory=list)
 
@@ -28,6 +32,8 @@ class Panel:
         return Panel(
             scene_description=d["scene_description"],
             characters=d.get("characters", []),
+            locations=d.get("locations", []),
+            props=d.get("props", []),
             camera_hint=d.get("camera_hint", "medium shot"),
             dialogue=[DialogueLine.from_dict(x) for x in d.get("dialogue", [])],
         )
@@ -62,4 +68,4 @@ class Story:
         return Story.from_dict(data)
 
     def save(self, path: str | Path) -> None:
-        Path(path).write_text(json.dumps(asdict(self), indent=2))
+        atomic_write_text(path, json.dumps(asdict(self), indent=2) + "\n")

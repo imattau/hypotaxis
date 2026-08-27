@@ -1,25 +1,35 @@
 from __future__ import annotations
 
+import os
+import re
+import shutil
 import sys
 import threading
+import time
 import uuid
 from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from manga_pipeline.config import PipelineConfig  # noqa: E402
 from manga_pipeline.llm import SmallLLM  # noqa: E402
+from manga_pipeline.pipeline import prepare_cast as prepare_cast_pipeline  # noqa: E402
 from manga_pipeline.pipeline import run as run_pipeline  # noqa: E402
 from manga_pipeline.registry import CharacterRegistry  # noqa: E402
-from manga_pipeline.schema import Story  # noqa: E402
-from manga_pipeline.story_adapt import adapt_story, parse_character_profiles  # noqa: E402
+from manga_pipeline.schema import DialogueLine, Panel, Story  # noqa: E402
+from manga_pipeline.story_adapt import (  # noqa: E402
+    adapt_story,
+    parse_character_profiles,
+    parse_location_profiles,
+    parse_prop_profiles,
+)
 
 STORIES_DIR = ROOT / "stories"
 REGISTRY_DIR = ROOT / "registry"
@@ -31,11 +41,59 @@ app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR), check_dir=False), na
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
 _jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+_JOB_TTL_SECONDS = 3600
 # shared by both adapt (Stage A, small LLM) and generate (Stage B-D, diffusion) -
 # on modest hardware these shouldn't run concurrently either, since Stage A's
 # LLM and Stage C's diffusion pipeline compete for the same GPU
 _gpu_lock = threading.Lock()
 _gpu_busy = False
+_API_TOKEN = os.environ.get("HYPOTAXIS_API_TOKEN")
+
+
+@app.middleware("http")
+async def protect_api_when_configured(request, call_next):
+    if _API_TOKEN and request.url.path.startswith("/api/"):
+        if request.headers.get("authorization") != f"Bearer {_API_TOKEN}":
+            return JSONResponse({"detail": "authentication required"}, status_code=401)
+    return await call_next(request)
+
+
+def _cleanup_jobs() -> None:
+    cutoff = time.time() - _JOB_TTL_SECONDS
+    with _jobs_lock:
+        stale = [
+            job_id
+            for job_id, job in _jobs.items()
+            if job.get("finished_at") is not None and job["finished_at"] < cutoff
+        ]
+        for job_id in stale:
+            del _jobs[job_id]
+
+
+def _create_job() -> str:
+    _cleanup_jobs()
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {"status": "queued", "message": "queued", "created_at": time.time()}
+    return job_id
+
+
+def _finish_job(job: dict, status: str, message: str = "done") -> None:
+    job["status"] = status
+    job["message"] = message
+    job["finished_at"] = time.time()
+
+
+def _validate_story_id(story_id: str) -> str:
+    if len(story_id) > 80 or not re.fullmatch(r"[A-Za-z0-9_-]+", story_id):
+        raise HTTPException(404, "story not found")
+    return story_id
+
+
+def _project_path(value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else ROOT / path
 
 
 def _try_claim_gpu() -> bool:
@@ -77,11 +135,14 @@ def _extract_text(filename: str, content: bytes) -> str:
 
 @app.post("/api/extract-text")
 async def extract_text(file: UploadFile):
-    if Path(file.filename).suffix.lower() not in _SUPPORTED_UPLOAD_EXTENSIONS:
+    filename = file.filename or ""
+    if Path(filename).suffix.lower() not in _SUPPORTED_UPLOAD_EXTENSIONS:
         raise HTTPException(400, "unsupported file type - use .txt, .md, or .docx")
     content = await file.read()
+    if len(content) > 25 * 1024 * 1024:
+        raise HTTPException(413, "uploaded file is too large (maximum 25 MiB)")
     try:
-        text = _extract_text(file.filename, content)
+        text = _extract_text(filename, content)
     except HTTPException:
         raise
     except Exception as e:  # noqa: BLE001
@@ -90,13 +151,15 @@ async def extract_text(file: UploadFile):
 
 
 class AdaptRequest(BaseModel):
-    id: str
-    title: str
-    prose: str
-    style_prompt: str = "monochrome manga, screentone shading, dynamic ink linework"
-    llm: str = "Qwen/Qwen2.5-0.5B-Instruct"
-    device: str = "cuda"
-    character_profiles: str = ""
+    id: str = Field(max_length=80)
+    title: str = Field(max_length=500)
+    prose: str = Field(max_length=2_000_000)
+    style_prompt: str = Field("monochrome manga, screentone shading, dynamic ink linework", max_length=2000)
+    llm: str = "Qwen/Qwen2.5-3B-Instruct"
+    device: str = "auto"
+    character_profiles: str = Field("", max_length=100_000)
+    location_profiles: str = Field("", max_length=100_000)
+    prop_profiles: str = Field("", max_length=100_000)
 
 
 def _run_adapt_job(job_id: str, req: AdaptRequest, story_id: str) -> None:
@@ -108,8 +171,14 @@ def _run_adapt_job(job_id: str, req: AdaptRequest, story_id: str) -> None:
 
     try:
         registry = CharacterRegistry(REGISTRY_DIR / f"{story_id}.json")
+        location_registry = CharacterRegistry(REGISTRY_DIR / f"{story_id}_locations.json")
+        prop_registry = CharacterRegistry(REGISTRY_DIR / f"{story_id}_props.json")
         llm = SmallLLM(model_id=req.llm, device=req.device)
-        character_profiles = parse_character_profiles(req.character_profiles) if req.character_profiles else None
+        character_profiles, abstract_characters = (
+            parse_character_profiles(req.character_profiles) if req.character_profiles else (None, None)
+        )
+        location_profiles = parse_location_profiles(req.location_profiles) if req.location_profiles else None
+        prop_profiles = parse_prop_profiles(req.prop_profiles) if req.prop_profiles else None
         story = adapt_story(
             req.prose,
             story_id,
@@ -120,18 +189,20 @@ def _run_adapt_job(job_id: str, req: AdaptRequest, story_id: str) -> None:
             dataset_path=DATASET_PATH,
             on_progress=on_progress,
             character_profiles=character_profiles,
+            abstract_characters=abstract_characters,
+            location_registry=location_registry,
+            location_profiles=location_profiles,
+            prop_registry=prop_registry,
+            prop_profiles=prop_profiles,
         )
         STORIES_DIR.mkdir(parents=True, exist_ok=True)
         story.save(STORIES_DIR / f"{story_id}.json")
-        job["status"] = "done"
-        job["message"] = "done"
+        _finish_job(job, "done")
         job["story_id"] = story_id
     except ValueError as e:
-        job["status"] = "error"
-        job["message"] = str(e)
+        _finish_job(job, "error", str(e))
     except Exception as e:  # noqa: BLE001
-        job["status"] = "error"
-        job["message"] = str(e)
+        _finish_job(job, "error", str(e))
     finally:
         _release_gpu()
 
@@ -145,8 +216,7 @@ def adapt(req: AdaptRequest):
     if not _try_claim_gpu():
         raise HTTPException(409, "another job (adapt or generate) is already running - only one at a time on this GPU")
 
-    job_id = str(uuid.uuid4())
-    _jobs[job_id] = {"status": "queued", "message": "queued"}
+    job_id = _create_job()
     thread = threading.Thread(target=_run_adapt_job, args=(job_id, req, story_id), daemon=True)
     thread.start()
     return {"job_id": job_id}
@@ -175,6 +245,7 @@ def list_stories():
 
 
 def _story_or_404(story_id: str) -> Story:
+    story_id = _validate_story_id(story_id)
     path = STORIES_DIR / f"{story_id}.json"
     if not path.exists():
         raise HTTPException(404, "story not found")
@@ -187,26 +258,161 @@ def get_story(story_id: str):
     return asdict(story)
 
 
-@app.get("/api/stories/{story_id}/registry")
-def get_registry(story_id: str):
-    registry = CharacterRegistry(REGISTRY_DIR / f"{story_id}.json")
-    entries = registry.all()
+class DialogueLineUpdate(BaseModel):
+    speaker: str
+    text: str
+    kind: str = "speech"
+
+
+class PanelUpdate(BaseModel):
+    scene_description: str = Field(max_length=10_000)
+    camera_hint: str = Field("medium shot", max_length=200)
+    characters: list[str] = []
+    locations: list[str] = []
+    props: list[str] = []
+    dialogue: list[DialogueLineUpdate] = []
+
+
+@app.put("/api/stories/{story_id}/pages/{page_index}/panels/{panel_index}")
+def update_panel(story_id: str, page_index: int, panel_index: int, req: PanelUpdate):
+    """Manual-correction step: Stage A's caption/speaker/tag output is
+    generated, not guaranteed, and this session's own testing found real
+    hallucinated captions, misattributed speakers, and bogus tags on an
+    actual manuscript - previously the only fix was hand-editing the Story
+    JSON file directly. Lets the studio UI edit and persist a single
+    panel's fields without re-running the whole adapt step (which would
+    also risk different/worse LLM output the second time)."""
+    story = _story_or_404(story_id)
+    if not 0 <= page_index < len(story.pages):
+        raise HTTPException(404, "page not found")
+    page = story.pages[page_index]
+    if not 0 <= panel_index < len(page.panels):
+        raise HTTPException(404, "panel not found")
+
+    page.panels[panel_index] = Panel(
+        scene_description=req.scene_description,
+        characters=req.characters,
+        locations=req.locations,
+        props=req.props,
+        camera_hint=req.camera_hint,
+        dialogue=[DialogueLine(speaker=line.speaker, text=line.text, kind=line.kind) for line in req.dialogue],
+    )
+    story.save(STORIES_DIR / f"{story_id}.json")
+    return {"updated": True}
+
+
+@app.delete("/api/stories/{story_id}")
+def delete_story(story_id: str):
+    _story_or_404(story_id)  # 404 before touching anything
+    (STORIES_DIR / f"{story_id}.json").unlink(missing_ok=True)
+    for suffix in ("", "_locations", "_props"):
+        (REGISTRY_DIR / f"{story_id}{suffix}.json").unlink(missing_ok=True)
+    shutil.rmtree(OUTPUT_DIR / story_id, ignore_errors=True)
+    return {"deleted": story_id}
+
+
+@app.delete("/api/stories/{story_id}/pages")
+def delete_pages(story_id: str):
+    """Clears generated page images and the PDF only - leaves the script and
+    any designed character/location/prop reference images alone, so
+    "Generate Pages" can be re-run from a clean slate without redesigning
+    the cast."""
+    _story_or_404(story_id)
+    out_dir = OUTPUT_DIR / story_id
+    if out_dir.exists():
+        for page_path in out_dir.glob("page_*.png"):
+            page_path.unlink()
+        (out_dir / f"{story_id}.pdf").unlink(missing_ok=True)
+    return {"cleared": story_id}
+
+
+def _registry_payload(registry: CharacterRegistry) -> dict:
     result = {}
-    for name, entry in entries.items():
+    for name, entry in registry.all().items():
         ref_url = None
         if entry.reference_image:
-            ref_path = Path(entry.reference_image)
+            ref_path = _project_path(entry.reference_image)
             try:
                 rel = ref_path.resolve().relative_to(OUTPUT_DIR.resolve())
                 ref_url = f"/output/{rel.as_posix()}"
             except ValueError:
                 ref_url = None
         result[name] = {"description": entry.description, "reference_image_url": ref_url}
-    return {"characters": result}
+    return result
+
+
+@app.get("/api/stories/{story_id}/registry")
+def get_registry(story_id: str):
+    _story_or_404(story_id)
+    story_id = _validate_story_id(story_id)
+    registry = CharacterRegistry(REGISTRY_DIR / f"{story_id}.json")
+    return {"characters": _registry_payload(registry)}
+
+
+@app.get("/api/stories/{story_id}/locations")
+def get_locations(story_id: str):
+    _story_or_404(story_id)
+    story_id = _validate_story_id(story_id)
+    location_registry = CharacterRegistry(REGISTRY_DIR / f"{story_id}_locations.json")
+    return {"locations": _registry_payload(location_registry)}
+
+
+@app.get("/api/stories/{story_id}/props")
+def get_props(story_id: str):
+    _story_or_404(story_id)
+    story_id = _validate_story_id(story_id)
+    prop_registry = CharacterRegistry(REGISTRY_DIR / f"{story_id}_props.json")
+    return {"props": _registry_payload(prop_registry)}
+
+
+def _delete_registry_entry(registry: CharacterRegistry, name: str) -> None:
+    """Deletes a single entry - e.g. a bogus name NER mistook for a
+    character/location/prop (alias merging catches variant spellings of a
+    real name, but not a wrong entity-type call entirely - those need
+    pruning by hand). 404s if the name isn't actually in this registry, so
+    a stale/mistyped request doesn't silently no-op. Also removes the
+    reference image file from disk, if any, since the registry itself
+    doesn't own that filesystem lifecycle."""
+    entry = registry.get(name)
+    if entry is None:
+        raise HTTPException(404, f"'{name}' not found in this registry")
+    if entry.reference_image:
+        reference = _project_path(entry.reference_image).resolve()
+        try:
+            reference.relative_to(OUTPUT_DIR.resolve())
+        except ValueError:
+            raise HTTPException(400, "reference image is outside the output directory")
+        reference.unlink(missing_ok=True)
+    registry.delete(name)
+
+
+@app.delete("/api/stories/{story_id}/registry/{name}")
+def delete_character(story_id: str, name: str):
+    _story_or_404(story_id)
+    registry = CharacterRegistry(REGISTRY_DIR / f"{story_id}.json")
+    _delete_registry_entry(registry, name)
+    return {"deleted": name}
+
+
+@app.delete("/api/stories/{story_id}/locations/{name}")
+def delete_location(story_id: str, name: str):
+    _story_or_404(story_id)
+    location_registry = CharacterRegistry(REGISTRY_DIR / f"{story_id}_locations.json")
+    _delete_registry_entry(location_registry, name)
+    return {"deleted": name}
+
+
+@app.delete("/api/stories/{story_id}/props/{name}")
+def delete_prop(story_id: str, name: str):
+    _story_or_404(story_id)
+    prop_registry = CharacterRegistry(REGISTRY_DIR / f"{story_id}_props.json")
+    _delete_registry_entry(prop_registry, name)
+    return {"deleted": name}
 
 
 @app.get("/api/stories/{story_id}/pages")
 def get_pages(story_id: str):
+    story_id = _validate_story_id(story_id)
     out_dir = OUTPUT_DIR / story_id
     if not out_dir.exists():
         return {"pages": [], "pdf_url": None}
@@ -218,14 +424,66 @@ def get_pages(story_id: str):
     }
 
 
+class PrepareCastRequest(BaseModel):
+    backend: str = "mock"
+    checkpoint: str = "stabilityai/sdxl-turbo"
+    device: str = "auto"
+    steps: int = Field(4, ge=1, le=100)
+    guidance_scale: float = Field(1.0, ge=0, le=30)
+    use_identity_adapter: bool = True
+    identity_adapter_scale: float = Field(0.6, ge=0, le=2)
+    force: bool = False
+
+
+def _run_prepare_cast_job(job_id: str, story: Story, cfg: PipelineConfig, force: bool) -> None:
+    job = _jobs[job_id]
+    job["status"] = "running"
+
+    def on_progress(msg: str) -> None:
+        job["message"] = msg
+
+    try:
+        prepare_cast_pipeline(story, cfg, on_progress=on_progress, force=force)
+        _finish_job(job, "done")
+    except Exception as e:  # noqa: BLE001
+        _finish_job(job, "error", str(e))
+    finally:
+        _release_gpu()
+
+
+@app.post("/api/stories/{story_id}/prepare-cast")
+def prepare_cast(story_id: str, req: PrepareCastRequest):
+    story = _story_or_404(story_id)
+
+    if not _try_claim_gpu():
+        raise HTTPException(409, "another job (adapt or generate) is already running - only one at a time on this GPU")
+
+    cfg = PipelineConfig(
+        backend=req.backend,
+        checkpoint=req.checkpoint,
+        device=req.device,
+        steps=req.steps,
+        guidance_scale=req.guidance_scale,
+        use_identity_adapter=req.use_identity_adapter,
+        identity_adapter_scale=req.identity_adapter_scale,
+        output_dir=str(OUTPUT_DIR),
+        registry_dir=str(REGISTRY_DIR),
+    )
+
+    job_id = _create_job()
+    thread = threading.Thread(target=_run_prepare_cast_job, args=(job_id, story, cfg, req.force), daemon=True)
+    thread.start()
+    return {"job_id": job_id}
+
+
 class GenerateRequest(BaseModel):
     backend: str = "mock"
     checkpoint: str = "stabilityai/sdxl-turbo"
-    device: str = "cuda"
-    steps: int = 4
-    guidance_scale: float = 1.0
+    device: str = "auto"
+    steps: int = Field(4, ge=1, le=100)
+    guidance_scale: float = Field(1.0, ge=0, le=30)
     use_identity_adapter: bool = True
-    identity_adapter_scale: float = 0.6
+    identity_adapter_scale: float = Field(0.6, ge=0, le=2)
 
 
 def _run_generation_job(job_id: str, story: Story, cfg: PipelineConfig) -> None:
@@ -237,12 +495,10 @@ def _run_generation_job(job_id: str, story: Story, cfg: PipelineConfig) -> None:
 
     try:
         pdf_path = run_pipeline(story, cfg, on_progress=on_progress)
-        job["status"] = "done"
-        job["message"] = "done"
+        _finish_job(job, "done")
         job["pdf_url"] = f"/output/{story.id}/{Path(pdf_path).name}"
     except Exception as e:  # noqa: BLE001
-        job["status"] = "error"
-        job["message"] = str(e)
+        _finish_job(job, "error", str(e))
     finally:
         _release_gpu()
 
@@ -266,8 +522,7 @@ def generate(story_id: str, req: GenerateRequest):
         registry_dir=str(REGISTRY_DIR),
     )
 
-    job_id = str(uuid.uuid4())
-    _jobs[job_id] = {"status": "queued", "message": "queued"}
+    job_id = _create_job()
     thread = threading.Thread(target=_run_generation_job, args=(job_id, story, cfg), daemon=True)
     thread.start()
     return {"job_id": job_id}
@@ -275,6 +530,7 @@ def generate(story_id: str, req: GenerateRequest):
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: str):
+    _cleanup_jobs()
     job = _jobs.get(job_id)
     if job is None:
         raise HTTPException(404, "job not found")

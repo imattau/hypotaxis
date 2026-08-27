@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from .config import resolve_device
+
 
 class SmallLLM:
     """Thin wrapper around a small local instruct model, used only for the
@@ -10,9 +12,9 @@ class SmallLLM:
     project's constraint to minimize LLM use for small-hardware users.
     """
 
-    def __init__(self, model_id: str = "Qwen/Qwen2.5-0.5B-Instruct", device: str = "cuda"):
+    def __init__(self, model_id: str = "Qwen/Qwen2.5-3B-Instruct", device: str = "auto"):
         self.model_id = model_id
-        self.device = device
+        self.device = resolve_device(device)
         self._pipe = None
 
     def _load(self):

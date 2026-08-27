@@ -1,0 +1,67 @@
+{
+  "id": "mill_test",
+  "title": "The Mill",
+  "style_prompt": "monochrome manga, screentone shading",
+  "pages": [
+    {
+      "layout": "H3",
+      "panels": [
+        {
+          "scene_description": "Kessa walks slowly toward the Mill, her boots sinking into the wet grass along the riverbank.",
+          "characters": [
+            "Kessa"
+          ],
+          "locations": [
+            "Mill"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The serene riverbank, devoid of any human presence, reflects the calm and undisturbed beauty of nature.",
+          "characters": [],
+          "locations": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The old waterwheel's ancient machinery hummed in the dimly lit workshop, its gears and drums creaking as it continued to spin, its moss-covered wooden spokes whispering secrets of time.",
+          "characters": [],
+          "locations": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        }
+      ]
+    },
+    {
+      "layout": "V3",
+      "panels": [
+        {
+          "scene_description": "The scene unfolds in a dimly lit room, with a lone figure pushing open a dusty door, her steps echoing against the cold stone walls.",
+          "characters": [],
+          "locations": [],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "The quiet, familiar setting of the Mill is transformed as Kessa returns, her long, flowing black hair cascading down her back in a gentle cascade, adding a touch of elegance to the scene.",
+          "characters": [
+            "Kessa"
+          ],
+          "locations": [
+            "Mill"
+          ],
+          "camera_hint": "medium shot",
+          "dialogue": []
+        },
+        {
+          "scene_description": "She stands at the water's edge, watching the wheel turn in the fading light, her eyes reflecting memories of what has transpired there.",
+          "characters": [],
+          "locations": [],
+          "camera_hint": "wide establishing shot",
+          "dialogue": []
+        }
+      ]
+    }
+  ]
+}

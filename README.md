@@ -9,9 +9,9 @@ required cloud APIs.
 
 | Stage | What it does | Key tech |
 |---|---|---|
-| **A — Story Adaptation** | Prose → structured Story JSON script (panels, dialogue, camera hints) | sentence embeddings for scene segmentation, LexRank (networkx) for panel-budget compression, spaCy NER + dependency parsing for characters/speaker attribution, a small local LLM (Qwen2.5-0.5B-Instruct by default) for panel captions |
-| **B — Character Identity** | Persistent per-character visual identity across the whole story | text registry + IP-Adapter reference portraits (generated once, reused everywhere) |
-| **C — Generation** | One base image per page, edited into panels | SDXL / SDXL-Turbo via `diffusers`, img2img panel edits |
+| **A — Story Adaptation** | Prose → structured Story JSON script (panels, dialogue, camera hints) | sentence embeddings for scene segmentation, LexRank (networkx) for panel-budget compression, spaCy NER + dependency parsing for characters/speaker attribution, a small local LLM (Qwen2.5-3B-Instruct by default) for panel captions |
+| **B — Character/Location/Prop Identity** | Persistent visual identity for characters and recurring locations; consistent wording for recurring props | characters/locations: text registry + IP-Adapter reference images, two simultaneous slots so a panel can be conditioned on a character and a setting at once. Props: text-anchored into the generation prompt only — image-conditioning a whole panel on a close-up of a small object distorts the rest of the composition |
+| **C — Generation** | Each panel generated independently at its own aspect ratio, then composed into a page | SDXL / SDXL-Turbo via `diffusers`, text2img per panel |
 | **D — Assembly** | Panels → laid-out page → dialogue bubbles → PDF | Pillow, deterministic, no model |
 
 A web studio UI (FastAPI + vanilla JS) sits on top for running the whole flow visually.
@@ -28,10 +28,26 @@ python -m spacy download en_core_web_sm      # Stage A's NER model
 pip install -r requirements-generation.txt   # Stage C real generation (diffusers/torch)
 pip install -r requirements-studio.txt       # web studio UI
 pip install -r requirements-training.txt     # Phase 3 LoRA captioner training (optional)
+pip install -r requirements-dev.txt          # pytest, for running tests/
 ```
 
 On Debian/Ubuntu-style systems with an externally-managed Python, add
 `--user --break-system-packages` to the `pip install` calls, or use a virtualenv instead.
+
+## Running tests
+
+```bash
+pip install -r requirements-story-adapt.txt -r requirements-dev.txt
+python -m spacy download en_core_web_sm
+pytest
+```
+
+Covers the pure-logic pieces of Stage A/B/D (dialogue speaker attribution, NER
+alias merging, panel-budget packing, bubble sizing/overflow, identity-conditioning
+policy) - no GPU or model download beyond spaCy's small English model is needed.
+Most of these tests were written directly from real bugs found while testing the
+pipeline against an actual manuscript, so they double as a changelog of past
+regressions.
 
 ## Quick start
 
@@ -44,6 +60,12 @@ python run_studio.py --port 8420
 Open `http://127.0.0.1:8420`, create a new story (paste text or upload a `.txt`/`.md`/`.docx`
 chapter), optionally add a [character profile](#character-profiles) cast sheet, then generate
 pages with the `mock` backend (instant, no GPU) or `diffusers` (real generation).
+
+Stage A's output (captions, camera hints, character/location/prop tags, dialogue lines) is
+generated, not guaranteed — an "Edit" button on every panel in the script view lets you
+correct it by hand (wrong caption, misattributed speaker, a tag that should or shouldn't be
+there) without re-running the whole adaptation step. Character/location/prop sheets also have
+a delete button per entry, for pruning a name automatic detection got wrong.
 
 **Command line**, the same two stages the UI drives:
 
@@ -65,12 +87,43 @@ on automatic detection — see `stories/character_profiles.example.txt` for the 
 (one `Name: description` per line). Pass it via `--character-profiles <path>` on the CLI,
 or the "Character profiles" field in the studio's New Story form.
 
+A character with no physical/humanoid body at all — an AI, a voice, a presence — can
+start their description with the tag `[no-form]` (e.g. `Nova: [no-form] no physical
+body; visualise only as...`). This skips reference-portrait generation and IP-Adapter
+identity conditioning for them entirely and text-anchors their description into the
+prompt instead, the same way props are handled — the normal reference-portrait template
+forces a human figure regardless of what the description says, so without this tag a
+character explicitly written as bodiless still gets rendered (and IP-Adapter-conditioned)
+as a person.
+
+## Location profiles
+
+Same format and mechanism as character profiles (`stories/location_profiles.example.txt`,
+`--location-profiles <path>`), but for recurring settings. Unlike characters, locations have
+**no automatic detection at all** — a generic-but-important setting like "the abandoned mill"
+isn't a named entity the way a person's name is — so a location only ever appears in the
+story if it's listed in a profile. Once registered, a location gets its own reference image
+and identity conditioning, running simultaneously alongside whichever character is in the
+same panel (two IP-Adapter slots active at once).
+
+## Prop profiles
+
+Same file format again (`stories/prop_profiles.example.txt`, `--prop-profiles <path>`), for
+small portable objects — a letter, a key, a sword. Props are **not** handled like locations:
+testing showed that generating an image reference the same way (a wide establishing shot)
+produces a cluttered, unusable scene for a small object, and conditioning a whole panel's
+image on a close-up of one incidental item would distort the rest of the composition around
+it. So a prop is only ever **text-anchored** — its description is woven into the generation
+prompt on exactly the panels it's tagged on, the same trick already used for character
+appearance notes. This also means a location and a prop can appear in the same panel without
+conflict, since text-anchoring doesn't compete for an IP-Adapter slot.
+
 ## Project status
 
 This is an active prototype, not a finished product. Known limitations are tracked
 honestly rather than papered over:
 
-- The Stage A caption LLM (0.5B) sometimes hallucinates content not in the source text.
+- The Stage A caption LLM (3B by default) still sometimes hallucinates content not in the source text on passages with little concrete visual detail, though noticeably less than the 0.5B model it replaced.
 - Dialogue speaker attribution can't resolve pure-pronoun cases ("he called out") without
   coreference resolution, which isn't wired in (the well-known libraries for this —
   `coreferee`, `spacy-experimental`, `BookNLP` — are all currently incompatible with a

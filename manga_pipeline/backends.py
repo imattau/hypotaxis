@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from abc import ABC, abstractmethod
 
 from PIL import Image, ImageDraw
 
 from pathlib import Path
 
-from .config import PipelineConfig
+from .config import PipelineConfig, resolve_device
 from .fonts import load_font, wrap_to_width
 from .registry import CharacterRegistry
 from .schema import Panel, Page
@@ -18,53 +19,126 @@ def _seed_for(story_id: str, page_index: int, panel_index: int = -1) -> int:
     return int(hashlib.sha256(key.encode()).hexdigest()[:8], 16)
 
 
-def _dominant_character(page: Page) -> str | None:
-    """Character appearing in the most panels on this page, or None if the
-    page has no characters at all. Used to identity-condition the page's
-    base image itself, not just the per-panel edits."""
+def _dominant(names_per_panel: list[list[str]]) -> str | None:
+    """Name appearing in the most panels, or None if there are none at all.
+    Shared by _dominant_character and _dominant_location."""
     counts: dict[str, int] = {}
-    for panel in page.panels:
-        for name in panel.characters:
+    for names in names_per_panel:
+        for name in names:
             counts[name] = counts.get(name, 0) + 1
     if not counts:
         return None
     return max(counts, key=counts.get)
 
 
+def _dominant_character(page: Page) -> str | None:
+    """Character appearing in the most panels on this page, or None if the
+    page has no characters at all. Used to identity-condition the page's
+    base image itself, not just the per-panel edits."""
+    return _dominant([panel.characters for panel in page.panels])
+
+
+def _dominant_location(page: Page) -> str | None:
+    """Same idea as _dominant_character, but for locations - only ever
+    populated from author-supplied location profiles, since there's no
+    automatic detection for generic-but-important settings."""
+    return _dominant([panel.locations for panel in page.panels])
+
+
+def _prop_notes(panel: Panel, prop_registry: CharacterRegistry | None) -> str:
+    """Text-anchoring for props: unlike characters/locations, props are not
+    image-conditioned via IP-Adapter (see parse_prop_profiles for why - a
+    'wide establishing shot' reference for a small object produces a
+    cluttered unusable scene, and whole-image conditioning on a close-up
+    object shot would distort a panel's entire composition around one
+    incidental item). Instead, whenever Stage A tagged a prop on this
+    specific panel, its description is woven directly into the generation
+    prompt, the same trick Stage A already uses for character appearance
+    notes. No dominant-page fallback the way characters/locations get one:
+    over-including a prop's description on panels that don't actually
+    contain it would introduce stray, wrong mentions of the object.
+    """
+    if prop_registry is None or not panel.props:
+        return ""
+    notes = []
+    for name in panel.props:
+        entry = prop_registry.get(name)
+        notes.append(f"{name} ({entry.description})" if entry else name)
+    return ", ".join(notes)
+
+
+def _abstract_character_note(name: str | None, registry: CharacterRegistry | None) -> str:
+    """Text-anchoring for a character marked abstract/no-form (see
+    parse_character_profiles) - same trick as _prop_notes, for the same
+    reason: an SDXL 'character reference portrait' forces a human figure
+    regardless of what the description says, so an entity explicitly
+    written as having no body is never image-conditioned, only described
+    in the prompt on the panel(s) it's actually in."""
+    if name is None or registry is None:
+        return ""
+    entry = registry.get(name)
+    return f"{name} ({entry.description})" if entry else name
+
+
 class ImageBackend(ABC):
-    def prepare_characters(self, story_id: str, registry: CharacterRegistry, style_prompt: str) -> None:
+    def prepare_characters(
+        self, story_id: str, registry: CharacterRegistry, style_prompt: str, force: bool = False
+    ) -> None:
         """Generate/refresh any per-character identity assets (Stage B) up
         front, right after story adaptation and before any page is
         generated - rather than lazily on first appearance during Stage C.
         This guarantees every character in the registry gets a reference
         regardless of whether they happen to first appear in a solo panel,
         and keeps Stage C's per-panel loop free of first-use branching.
-        Default no-op; MockBackend has nothing to prepare.
+        Also callable standalone (studio's "Generate Cast" step) so a user
+        can preview/approve identities before spending time on full page
+        generation. force=True regenerates even names that already have a
+        reference image, for a manual "Regenerate" request; the implicit
+        call from run_pipeline always leaves force=False so it stays a
+        no-op idempotent pass over whatever the standalone step already
+        produced. Default no-op; MockBackend has nothing to prepare.
         """
 
+    def prepare_locations(
+        self, story_id: str, location_registry: CharacterRegistry, style_prompt: str, force: bool = False
+    ) -> None:
+        """Same idea as prepare_characters, for locations. Default no-op;
+        MockBackend has nothing to prepare."""
+
+    def prepare_props(
+        self, story_id: str, prop_registry: CharacterRegistry, style_prompt: str, force: bool = False
+    ) -> None:
+        """Generates a reference image per prop for human review in the
+        studio UI only - props are never image-conditioned during
+        generation (see parse_prop_profiles), so this reference is purely
+        documentation, not fed back into generate_panel. Default no-op;
+        MockBackend has nothing to prepare."""
+
     @abstractmethod
-    def generate_base(
+    def generate_panel(
         self,
         story_id: str,
         page_index: int,
         page: Page,
-        size: tuple[int, int],
-        style_prompt: str,
-        registry: CharacterRegistry | None,
-    ) -> Image.Image: ...
-
-    @abstractmethod
-    def edit_panel(
-        self,
-        base: Image.Image,
-        story_id: str,
-        page_index: int,
         panel_index: int,
         panel: Panel,
         size: tuple[int, int],
         style_prompt: str,
         registry: CharacterRegistry | None,
-    ) -> Image.Image: ...
+        location_registry: CharacterRegistry | None = None,
+        prop_registry: CharacterRegistry | None = None,
+    ) -> Image.Image:
+        """Generate a single panel image at its own target size (the actual
+        pixel dimensions of its box in the page layout). Each panel is
+        generated independently rather than warped out of one shared
+        whole-page image: an earlier design generated one full-page base
+        image and stretched/squashed it into each panel's differently
+        shaped box (a thin V3 strip, a G22 quadrant, ...) via img2img,
+        which is what produced visibly elongated/squashed/repeated panels.
+        compose_page() still crops each returned image to fit its box
+        exactly, so panels don't need to be pixel-perfect on size, just the
+        right aspect ballpark.
+        """
 
 
 class MockBackend(ImageBackend):
@@ -72,30 +146,18 @@ class MockBackend(ImageBackend):
     can be validated on any machine before wiring up a real diffusion model.
     """
 
-    def generate_base(
+    def generate_panel(
         self,
         story_id: str,
         page_index: int,
         page: Page,
-        size: tuple[int, int],
-        style_prompt: str,
-        registry: CharacterRegistry | None,
-    ) -> Image.Image:
-        seed = _seed_for(story_id, page_index)
-        hue = seed % 360
-        color = _hsv_to_rgb(hue, 0.25, 0.85)
-        return Image.new("RGB", size, color)
-
-    def edit_panel(
-        self,
-        base: Image.Image,
-        story_id: str,
-        page_index: int,
         panel_index: int,
         panel: Panel,
         size: tuple[int, int],
         style_prompt: str,
         registry: CharacterRegistry | None,
+        location_registry: CharacterRegistry | None = None,
+        prop_registry: CharacterRegistry | None = None,
     ) -> Image.Image:
         seed = _seed_for(story_id, page_index, panel_index)
         hue = seed % 360
@@ -114,25 +176,59 @@ class DiffusersBackend(ImageBackend):
     """Real generation backend. Imports torch/diffusers lazily so the mock
     backend keeps working on machines without them installed.
 
-    edit_panel uses a generic img2img pass as a placeholder for a proper
-    multi-panel edit model (e.g. Qwen-Edit); swap in a purpose-built editor
-    once one is wired in.
+    generate_panel() generates each panel independently via text2img, sized
+    to that panel's own layout box (rounded to a multiple of 8 for SDXL,
+    then resized back to the exact target for compose_page). An earlier
+    version generated one shared full-page "base" image and img2img'd it
+    into each panel's box via a plain resize - since panels on the same page
+    can have very different aspect ratios (a thin V3 strip vs. a G22
+    quadrant), that resize visibly stretched/squashed/repeated the same
+    page content across panels. Generating each panel at its own aspect
+    ratio from the start removes that distortion entirely.
 
-    Identity adapter (Stage B/Phase 4): when a panel has exactly one named
-    character, condition edit_panel on a persistent per-character reference
-    image via IP-Adapter, generated once on first appearance and reused for
-    every later panel/page. This targets the specific gap Phase 2 testing
-    found - text-only character descriptions were not enough to keep a
-    character's appearance consistent across pages. Panels with zero or
-    multiple characters fall back to text-only conditioning (IP-Adapter
-    scale 0) since blending multiple identities into one panel is a harder
-    problem left for a future pass.
+    Identity adapter (Stage B/Phase 4): two IP-Adapter slots are loaded
+    simultaneously - one for character identity, one for location/prop
+    identity - so a generation can be conditioned on both at once (verified
+    empirically: a character reference and a location reference combined
+    both come through recognizably in the same image, neither one
+    drowning out the other). For characters: a panel with exactly one named
+    character conditions on that character's reference; zero characters
+    falls back to the page's dominant character (Stage A leaving a panel
+    untagged usually means an ongoing scene, not a new one); multiple
+    characters skip identity conditioning entirely, since blending several
+    identities into one panel is a harder unsolved problem. Locations follow
+    the identical three-way policy on panel.locations, using the page's
+    dominant location as the zero-location fallback. Cross-panel/cross-page
+    continuity within a page now rests entirely on this identity
+    conditioning plus shared prompt wording, since there's no longer a
+    shared base image's pixels to inherit from.
+
+    A character whose profile is tagged "[no-form]" (see
+    parse_character_profiles) - an AI, a voice, a presence with no physical
+    body - is excluded from this whole policy and handled like a prop
+    instead (see _abstract_character_note): no reference portrait, no
+    IP-Adapter slot. Confirmed empirically that skipping this matters: the
+    normal "character reference portrait, front-facing" template produces a
+    photorealistic human face regardless of what the description says, so
+    without this carve-out an explicitly bodiless character still gets
+    rendered - and then IP-Adapter-conditioned - as a person.
+
+    Props are handled entirely differently: no IP-Adapter slot, no dominant-
+    page fallback. Testing showed a small portable object doesn't survive
+    IP-Adapter image conditioning well - a "wide establishing shot" reference
+    (the location template) produces a cluttered scene rather than a clean
+    single-object reference, and even a clean close-up reference would risk
+    distorting a panel's whole composition around one incidental item. So a
+    prop is only ever text-anchored: its description is woven directly into
+    generate_panel's prompt on exactly the panels Stage A tagged it on (see
+    _prop_notes), the same mechanism Stage A already uses for character
+    appearance notes.
     """
 
     def __init__(self, cfg: PipelineConfig):
         self.cfg = cfg
+        self.device = resolve_device(cfg.device)
         self._base_pipe = None
-        self._edit_pipe = None
         self._ip_adapter_loaded = False
         self._neutral_ip_image = None
 
@@ -140,9 +236,9 @@ class DiffusersBackend(ImageBackend):
         if self._base_pipe is not None:
             return
         import torch
-        from diffusers import AutoPipelineForImage2Image, AutoPipelineForText2Image
+        from diffusers import AutoPipelineForText2Image
 
-        dtype = torch.float16 if self.cfg.device.startswith("cuda") else torch.float32
+        dtype = torch.float16 if self.device.startswith("cuda") else torch.float32
         variant = "fp16" if dtype is torch.float16 else None
         try:
             self._base_pipe = AutoPipelineForText2Image.from_pretrained(
@@ -156,10 +252,19 @@ class DiffusersBackend(ImageBackend):
         self._base_pipe.vae.enable_tiling()
 
         if self.cfg.use_identity_adapter:
-            # load before from_pipe() so the shared unet/image_encoder carry the adapter over;
-            # works fine before device placement since it's just loading state dicts
-            self._base_pipe.load_ip_adapter("h94/IP-Adapter", subfolder="sdxl_models", weight_name="ip-adapter_sdxl.bin")
-            self._base_pipe.set_ip_adapter_scale(0.0)
+            # two slots loaded from the same checkpoint file: slot 0 = character
+            # identity, slot 1 = location/prop identity - diffusers supports this
+            # natively via list arguments to load_ip_adapter/set_ip_adapter_scale
+            # and a list of images to ip_adapter_image, one entry per slot.
+            # Loaded before from_pipe() so the shared unet/image_encoder carry
+            # the adapters over; works fine before device placement since it's
+            # just loading state dicts.
+            self._base_pipe.load_ip_adapter(
+                ["h94/IP-Adapter", "h94/IP-Adapter"],
+                subfolder=["sdxl_models", "sdxl_models"],
+                weight_name=["ip-adapter_sdxl.bin", "ip-adapter_sdxl.bin"],
+            )
+            self._base_pipe.set_ip_adapter_scale([0.0, 0.0])
             self._ip_adapter_loaded = True
             # enable_attention_slicing() unconditionally overwrites every cross-attention
             # processor with a plain SlicedAttnProcessor, which clobbers the IP-Adapter-aware
@@ -168,19 +273,16 @@ class DiffusersBackend(ImageBackend):
             # to reintroduce the VAE-decode OOM the slicing/tiling above was fixing, so trade
             # speed for memory instead: keep only the actively-computing submodule on GPU.
             # enable_model_cpu_offload() manages device placement itself - don't call .to() first.
-            if self.cfg.device.startswith("cuda"):
-                self._base_pipe.enable_model_cpu_offload(device=self.cfg.device)
+            if self.device.startswith("cuda"):
+                self._base_pipe.enable_model_cpu_offload(device=self.device)
             else:
-                self._base_pipe.to(self.cfg.device)
+                self._base_pipe.to(self.device)
         else:
-            self._base_pipe.to(self.cfg.device)
+            self._base_pipe.to(self.device)
             self._base_pipe.enable_attention_slicing()
 
-        # share weights with the base pipeline instead of loading a second full copy
-        self._edit_pipe = AutoPipelineForImage2Image.from_pipe(self._base_pipe)
-
-    def _character_dir(self, story_id: str) -> Path:
-        path = Path(self.cfg.output_dir) / story_id / "characters"
+    def _asset_dir(self, story_id: str, kind: str) -> Path:
+        path = Path(self.cfg.output_dir) / story_id / kind
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -189,36 +291,66 @@ class DiffusersBackend(ImageBackend):
             self._neutral_ip_image = Image.new("RGB", (224, 224), (128, 128, 128))
         return self._neutral_ip_image
 
-    def _ip_kwargs(self, pipe, image: Image.Image | None, scale: float) -> dict:
+    def _ip_kwargs(
+        self,
+        pipe,
+        char_image: Image.Image | None,
+        char_scale: float,
+        loc_image: Image.Image | None,
+        loc_scale: float,
+    ) -> dict:
         # once IP-Adapter is loaded, every call on this unet must supply an
-        # ip_adapter_image - a neutral placeholder at scale=0.0 is a
-        # mathematically-inert stand-in for "no identity conditioning here"
+        # ip_adapter_image for every slot - a neutral placeholder at scale=0.0
+        # is a mathematically-inert stand-in for "no identity conditioning
+        # in this slot"
         if not self._ip_adapter_loaded:
             return {}
-        pipe.set_ip_adapter_scale(scale)
-        return {"ip_adapter_image": image if image is not None else self._neutral_image()}
+        pipe.set_ip_adapter_scale([char_scale, loc_scale])
+        return {
+            "ip_adapter_image": [
+                char_image if char_image is not None else self._neutral_image(),
+                loc_image if loc_image is not None else self._neutral_image(),
+            ]
+        }
 
-    def prepare_characters(self, story_id: str, registry: CharacterRegistry, style_prompt: str) -> None:
+    def prepare_characters(
+        self, story_id: str, registry: CharacterRegistry, style_prompt: str, force: bool = False
+    ) -> None:
+        self._load()
+        for name, entry in registry.all().items():
+            if entry.is_abstract:
+                # like props: this reference is purely for the studio UI to
+                # display, never fed into IP-Adapter conditioning, so it's
+                # generated regardless of use_identity_adapter
+                self._reference_image(name, story_id, style_prompt, registry, force=force)
+                continue
+            if not self.cfg.use_identity_adapter:
+                continue
+            self._reference_image(name, story_id, style_prompt, registry, force=force)
+
+    def prepare_locations(
+        self, story_id: str, location_registry: CharacterRegistry, style_prompt: str, force: bool = False
+    ) -> None:
         if not self.cfg.use_identity_adapter:
             return
         self._load()
-        for name in registry.all():
-            self._reference_image(name, story_id, style_prompt, registry)
+        for name in location_registry.all():
+            self._location_reference_image(name, story_id, style_prompt, location_registry, force=force)
 
-    def _reference_image(self, name: str, story_id: str, style_prompt: str, registry: CharacterRegistry):
-        from PIL import Image as PILImage
+    def prepare_props(
+        self, story_id: str, prop_registry: CharacterRegistry, style_prompt: str, force: bool = False
+    ) -> None:
+        # not gated on use_identity_adapter: props are never image-conditioned
+        # during generation, so this reference is purely for the studio UI to
+        # display, independent of whether the identity-adapter feature is on
+        self._load()
+        for name in prop_registry.all():
+            self._prop_reference_image(name, story_id, style_prompt, prop_registry, force=force)
 
-        entry = registry.get(name)
-        if entry and entry.reference_image and Path(entry.reference_image).exists():
-            return PILImage.open(entry.reference_image).convert("RGB")
-
-        description = entry.description if entry else name
-        prompt = f"{style_prompt}, character reference portrait of {name}, {description}, plain background, front-facing"
+    def _generate_reference(self, prompt: str, story_id: str, name: str, kind: str, registry: CharacterRegistry):
         import torch
 
-        generator = torch.Generator(device=self.cfg.device).manual_seed(
-            _seed_for(f"{story_id}:character", 0, hash(name) % 1000)
-        )
+        generator = torch.Generator(device=self.device).manual_seed(_seed_for(f"{story_id}:{kind}:{name}", 0))
         result = self._base_pipe(
             prompt=prompt,
             num_inference_steps=self.cfg.steps,
@@ -226,89 +358,148 @@ class DiffusersBackend(ImageBackend):
             width=512,
             height=512,
             generator=generator,
-            **self._ip_kwargs(self._base_pipe, None, 0.0),
+            **self._ip_kwargs(self._base_pipe, None, 0.0, None, 0.0),
         )
         image = result.images[0]
-        path = self._character_dir(story_id) / f"{name}.png"
+        safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._") or "asset"
+        name_suffix = hashlib.sha256(name.encode("utf-8")).hexdigest()[:10]
+        path = self._asset_dir(story_id, kind) / f"{safe_name[:80]}-{name_suffix}.png"
         image.save(path)
         registry.set_reference_image(name, str(path))
         return image
 
-    def generate_base(
+    def _reference_image(
+        self, name: str, story_id: str, style_prompt: str, registry: CharacterRegistry, force: bool = False
+    ):
+        from PIL import Image as PILImage
+
+        entry = registry.get(name)
+        if not force and entry and entry.reference_image and Path(entry.reference_image).exists():
+            return PILImage.open(entry.reference_image).convert("RGB")
+
+        description = entry.description if entry else name
+        if entry and entry.is_abstract:
+            # no "character portrait, front-facing" template here - that
+            # template forces a human figure regardless of the description
+            # (confirmed empirically), which is exactly wrong for something
+            # explicitly written as having no body
+            prompt = (
+                f"{style_prompt}, abstract visual motif representing {name}: {description}, "
+                "no face, no human figure, no body, plain background"
+            )
+        else:
+            prompt = f"{style_prompt}, character reference portrait of {name}, {description}, plain background, front-facing"
+        return self._generate_reference(prompt, story_id, name, "characters", registry)
+
+    def _location_reference_image(
+        self,
+        name: str,
+        story_id: str,
+        style_prompt: str,
+        location_registry: CharacterRegistry,
+        force: bool = False,
+    ):
+        from PIL import Image as PILImage
+
+        entry = location_registry.get(name)
+        if not force and entry and entry.reference_image and Path(entry.reference_image).exists():
+            return PILImage.open(entry.reference_image).convert("RGB")
+
+        description = entry.description if entry else name
+        prompt = f"{style_prompt}, location reference: {name}, {description}, wide establishing shot, no characters"
+        return self._generate_reference(prompt, story_id, name, "locations", location_registry)
+
+    def _prop_reference_image(
+        self, name: str, story_id: str, style_prompt: str, prop_registry: CharacterRegistry, force: bool = False
+    ):
+        from PIL import Image as PILImage
+
+        entry = prop_registry.get(name)
+        if not force and entry and entry.reference_image and Path(entry.reference_image).exists():
+            return PILImage.open(entry.reference_image).convert("RGB")
+
+        # close-up isolated object shot, not a wide establishing shot - testing
+        # showed the location-style wide-shot template produces a cluttered,
+        # unusable scene for a small object (see parse_prop_profiles)
+        description = entry.description if entry else name
+        prompt = f"{style_prompt}, prop reference: {name}, {description}, close-up, isolated object, plain background"
+        return self._generate_reference(prompt, story_id, name, "props", prop_registry)
+
+    def _resolve_target(self, names: list[str], dominant: str | None) -> str | None:
+        if len(names) == 1:
+            return names[0]
+        if not names:
+            return dominant  # untagged panel: assume continuity with the page's dominant asset
+        return None  # multiple: blending several identities into one panel is unsolved, skip
+
+    def generate_panel(
         self,
         story_id: str,
         page_index: int,
         page: Page,
-        size: tuple[int, int],
-        style_prompt: str,
-        registry: CharacterRegistry | None,
-    ) -> Image.Image:
-        self._load()
-        import torch
-
-        seed = _seed_for(story_id, page_index)
-        generator = torch.Generator(device=self.cfg.device).manual_seed(seed)
-        scene = page.panels[0].scene_description if page.panels else "manga page"
-        prompt = f"{style_prompt}, {scene}" if style_prompt else scene
-
-        # identity-condition the base image on the page's dominant character too,
-        # not just the per-panel edits - previously the base started from zero
-        # identity signal each page, so the per-panel edit had to pull the
-        # generated art all the way to the reference identity on its own, which
-        # is a large part of why cross-page consistency stayed weak even with
-        # the adapter active on edit_panel (see Phase 4 test results)
-        dominant = _dominant_character(page)
-        if registry is not None and dominant is not None:
-            ref_image = self._reference_image(dominant, story_id, style_prompt, registry)
-            ip_kwargs = self._ip_kwargs(self._base_pipe, ref_image, self.cfg.identity_adapter_scale)
-        else:
-            ip_kwargs = self._ip_kwargs(self._base_pipe, None, 0.0)
-
-        result = self._base_pipe(
-            prompt=prompt,
-            num_inference_steps=self.cfg.steps,
-            guidance_scale=self.cfg.guidance_scale,
-            width=size[0],
-            height=size[1],
-            generator=generator,
-            **ip_kwargs,
-        )
-        return result.images[0]
-
-    def edit_panel(
-        self,
-        base: Image.Image,
-        story_id: str,
-        page_index: int,
         panel_index: int,
         panel: Panel,
         size: tuple[int, int],
         style_prompt: str,
         registry: CharacterRegistry | None,
+        location_registry: CharacterRegistry | None = None,
+        prop_registry: CharacterRegistry | None = None,
     ) -> Image.Image:
         self._load()
         import torch
 
         seed = _seed_for(story_id, page_index, panel_index)
-        generator = torch.Generator(device=self.cfg.device).manual_seed(seed)
+        generator = torch.Generator(device=self.device).manual_seed(seed)
         prompt = f"{style_prompt}, {panel.scene_description}" if style_prompt else panel.scene_description
+        prop_notes = _prop_notes(panel, prop_registry)
+        if prop_notes:
+            prompt = f"{prompt}, featuring {prop_notes}"
 
-        if registry is not None and len(panel.characters) == 1:
-            ref_image = self._reference_image(panel.characters[0], story_id, style_prompt, registry)
-            ip_kwargs = self._ip_kwargs(self._edit_pipe, ref_image, self.cfg.identity_adapter_scale)
+        char_name = self._resolve_target(panel.characters, _dominant_character(page))
+        char_entry = registry.get(char_name) if (registry and char_name) else None
+        if char_entry and char_entry.is_abstract:
+            # text-anchored like a prop, never image-conditioned - see
+            # _abstract_character_note
+            char_image = None
+            char_scale = 0.0
+            abstract_note = _abstract_character_note(char_name, registry)
+            if abstract_note:
+                prompt = f"{prompt}, featuring {abstract_note}"
         else:
-            ip_kwargs = self._ip_kwargs(self._edit_pipe, None, 0.0)
+            char_image = self._reference_image(char_name, story_id, style_prompt, registry) if (registry and char_name) else None
+            char_scale = self.cfg.identity_adapter_scale if char_image is not None else 0.0
 
-        result = self._edit_pipe(
+        loc_name = self._resolve_target(panel.locations, _dominant_location(page))
+        loc_image = (
+            self._location_reference_image(loc_name, story_id, style_prompt, location_registry)
+            if (location_registry and loc_name)
+            else None
+        )
+        loc_scale = self.cfg.identity_adapter_scale if loc_image is not None else 0.0
+
+        # SDXL requires width/height to be multiples of 8; a panel's own box in
+        # the page layout (e.g. a third of the page width for an H3 layout)
+        # rarely lands on one, so generate at the nearest multiple of 8 and let
+        # compose_page's crop-to-fit handle the sub-pixel difference.
+        gen_width, gen_height = _round_to_8(size[0]), _round_to_8(size[1])
+
+        result = self._base_pipe(
             prompt=prompt,
-            image=base.resize(size),
-            strength=self.cfg.edit_strength,
             num_inference_steps=self.cfg.steps,
             guidance_scale=self.cfg.guidance_scale,
+            width=gen_width,
+            height=gen_height,
             generator=generator,
-            **ip_kwargs,
+            **self._ip_kwargs(self._base_pipe, char_image, char_scale, loc_image, loc_scale),
         )
-        return result.images[0]
+        image = result.images[0]
+        if (gen_width, gen_height) != size:
+            image = image.resize(size)
+        return image
+
+
+def _round_to_8(value: int) -> int:
+    return max(8, round(value / 8) * 8)
 
 
 def _hsv_to_rgb(h: float, s: float, v: float) -> tuple[int, int, int]:

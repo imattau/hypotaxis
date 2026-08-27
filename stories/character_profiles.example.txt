@@ -14,6 +14,14 @@
 # Listing a character here guarantees they are recognized throughout the
 # story regardless of what automatic name detection does or doesn't catch,
 # and skips the (sometimes unreliable) auto-generated appearance guess.
+#
+# A character with no physical/humanoid body at all - an AI, a voice, a
+# presence - can start their description with the tag "[no-form]". This
+# skips reference-portrait generation and IP-Adapter identity conditioning
+# entirely for them (both would otherwise force a human figure regardless
+# of the description) and instead weaves their description into the prompt
+# text on whichever panels they're in, the same way props are handled.
 
 Aiko: young woman, shoulder-length black bob haircut, tan raincoat, red satchel
 Ren: young man, short dark hair, casual jacket over a plain shirt
+Nova: [no-form] no physical body; visualise only as a soft shifting LED glow along walls and ceiling edges, colour drifting from cool blue to warm amber with emotional intensity

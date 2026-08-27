@@ -191,6 +191,57 @@ input:focus, textarea:focus, select:focus {
   color: var(--text);
 }
 
+.btn.danger {
+  border-color: var(--red-dim);
+  color: var(--red);
+}
+
+.btn.danger:hover {
+  background: var(--red-dim);
+  color: var(--paper);
+}
+
+.detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.detail-header .section-title {
+  margin: 32px 0 4px;
+}
+
+.detail-header .btn {
+  margin-top: 0;
+}
+
+.card {
+  position: relative;
+}
+
+.card-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  line-height: 20px;
+  padding: 0;
+  border: 2px solid var(--panel-border);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.card-delete:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
 .row {
   display: flex;
   gap: 20px;
@@ -264,6 +315,73 @@ input:focus, textarea:focus, select:focus {
   line-height: 1.5;
 }
 
+.panel-edit-btn {
+  margin-top: 10px;
+}
+
+.panel-edit textarea {
+  height: 80px;
+  min-height: 60px;
+}
+
+.panel-edit label {
+  margin: 12px 0 4px;
+}
+
+.panel-edit label:first-child {
+  margin-top: 0;
+}
+
+.panel-edit-actions {
+  margin-top: 16px;
+}
+
+.panel-edit-actions .btn {
+  margin-top: 0;
+}
+
+.dialogue-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.dialogue-row {
+  gap: 8px;
+  align-items: center;
+}
+
+.dialogue-row > div {
+  flex: 1;
+  min-width: 0;
+}
+
+.dl-kind-wrap {
+  flex: 0 0 110px !important;
+}
+
+.dl-text-wrap {
+  flex: 3 !important;
+}
+
+.dl-remove {
+  flex: 0 0 auto;
+  background: var(--panel);
+  border: 2px solid var(--panel-border);
+  color: var(--text-dim);
+  width: 30px;
+  height: 30px;
+  border-radius: 2px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.dl-remove:hover {
+  border-color: var(--red);
+  color: var(--red);
+}
+
 .chip {
   display: inline-block;
   border: 1px solid var(--red-dim);
@@ -273,6 +391,16 @@ input:focus, textarea:focus, select:focus {
   padding: 1px 8px;
   border-radius: 10px;
   margin: 6px 6px 0 0;
+}
+
+.chip.location-chip {
+  border-color: var(--panel-border);
+  background: rgba(154, 151, 143, 0.15);
+}
+
+.chip.prop-chip {
+  border-color: #8a6d3b;
+  background: rgba(184, 134, 11, 0.15);
 }
 
 .bubble {

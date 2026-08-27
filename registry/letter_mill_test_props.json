@@ -1,0 +1,12 @@
+{
+  "Letter": {
+    "name": "Letter",
+    "description": "a folded handwritten letter with a wax seal, worn at the edges",
+    "reference_image": "output/letter_mill_test/props/Letter.png"
+  },
+  "Key": {
+    "name": "Key",
+    "description": "a small tarnished brass key on a frayed ribbon",
+    "reference_image": "output/letter_mill_test/props/Key.png"
+  }
+}

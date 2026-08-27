@@ -1,0 +1,34 @@
+{
+  "id": "letter_mill_test",
+  "title": "Letter Mill Test",
+  "style_prompt": "monochrome manga, screentone shading",
+  "pages": [
+    {
+      "layout": "H2",
+      "panels": [
+        {
+          "scene_description": "Kessa, standing at the Mill, holds the Letter tightly in both hands, known as Kessa.",
+          "characters": [
+            "Kessa"
+          ],
+          "locations": [
+            "Mill"
+          ],
+          "props": [
+            "Letter"
+          ],
+          "camera_hint": "close-up",
+          "dialogue": []
+        },
+        {
+          "scene_description": "She stands before her mother's grave, holding the ancient book that has been passed down through generations.",
+          "characters": [],
+          "locations": [],
+          "props": [],
+          "camera_hint": "wide establishing shot",
+          "dialogue": []
+        }
+      ]
+    }
+  ]
+}

@@ -14,6 +14,36 @@ from .registry import CharacterRegistry
 from .schema import Story
 
 
+def prepare_cast(
+    story: Story, cfg: PipelineConfig, on_progress: "Callable[[str], None] | None" = None, force: bool = False
+) -> None:
+    """Standalone Stage B step: generate/refresh character, location, and
+    prop reference images without touching page generation. Lets the studio
+    UI show a cast preview the user can review (and, with force=True,
+    regenerate) before committing GPU time to a full page run. `run()` below
+    also calls prepare_* itself so a direct page-generation request still
+    works without this step, but that call always uses force=False, so it's
+    a no-op over whatever this step already produced.
+    """
+
+    def report(msg: str) -> None:
+        if on_progress is not None:
+            on_progress(msg)
+
+    backend = build_backend(cfg)
+    registry = CharacterRegistry(Path(cfg.registry_dir) / f"{story.id}.json")
+    location_registry = CharacterRegistry(Path(cfg.registry_dir) / f"{story.id}_locations.json")
+    prop_registry = CharacterRegistry(Path(cfg.registry_dir) / f"{story.id}_props.json")
+
+    report("designing characters")
+    backend.prepare_characters(story.id, registry, story.style_prompt, force=force)
+    report("designing locations")
+    backend.prepare_locations(story.id, location_registry, story.style_prompt, force=force)
+    report("designing props")
+    backend.prepare_props(story.id, prop_registry, story.style_prompt, force=force)
+    report("done")
+
+
 def run(story: Story, cfg: PipelineConfig, on_progress: "Callable[[str], None] | None" = None) -> Path:
     def report(msg: str) -> None:
         if on_progress is not None:
@@ -24,9 +54,15 @@ def run(story: Story, cfg: PipelineConfig, on_progress: "Callable[[str], None] |
     out_dir = Path(cfg.output_dir) / story.id
     out_dir.mkdir(parents=True, exist_ok=True)
     registry = CharacterRegistry(Path(cfg.registry_dir) / f"{story.id}.json")
+    location_registry = CharacterRegistry(Path(cfg.registry_dir) / f"{story.id}_locations.json")
+    prop_registry = CharacterRegistry(Path(cfg.registry_dir) / f"{story.id}_props.json")
 
     report("designing characters")
     backend.prepare_characters(story.id, registry, story.style_prompt)
+    report("designing locations")
+    backend.prepare_locations(story.id, location_registry, story.style_prompt)
+    report("designing props")
+    backend.prepare_props(story.id, prop_registry, story.style_prompt)
 
     page_images: list[Image.Image] = []
     for page_index, page in enumerate(story.pages):
@@ -37,18 +73,19 @@ def run(story: Story, cfg: PipelineConfig, on_progress: "Callable[[str], None] |
                 f"page {page_index}: layout '{page.layout}' expects {expected} panels, got {len(page.panels)}"
             )
 
-        base = backend.generate_base(story.id, page_index, page, size, story.style_prompt, registry)
         boxes = boxes_for(page.layout)
         panel_images = [
-            backend.edit_panel(
-                base,
+            backend.generate_panel(
                 story.id,
                 page_index,
+                page,
                 panel_index,
                 panel,
                 (max(1, round(w * size[0])), max(1, round(h * size[1]))),
                 story.style_prompt,
                 registry,
+                location_registry,
+                prop_registry,
             )
             for panel_index, (panel, (_, _, w, h)) in enumerate(zip(page.panels, boxes))
         ]

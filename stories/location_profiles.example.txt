@@ -1,0 +1,17 @@
+# Location/prop profile format
+#
+# One location or prop per line: "Name: description"
+#   - Name must exactly match how the place/object is named in your prose
+#     (case-sensitive) - this is what gets matched against the story text.
+#   - Description should be a visual description (architecture, materials,
+#     lighting, distinguishing features) - it seeds the location's Stage B
+#     registry entry and is used to generate its reference image.
+#   - Blank lines and lines starting with # (like this one) are ignored.
+#
+# Unlike characters, locations/props have NO automatic detection at all -
+# generic-but-important settings like "the abandoned mill" aren't named
+# entities the way a person's name is, so a location only ever gets tagged
+# on a panel if it's listed here.
+
+Mill: old wooden watermill beside a river, moss-covered walls, large wooden waterwheel
+Vault: heavy steel bank vault door, dim warehouse lighting, stacked wooden crates nearby

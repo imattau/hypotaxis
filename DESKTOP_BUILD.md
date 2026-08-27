@@ -43,8 +43,12 @@ The public package repository is published at
 `https://imattau.github.io/hypotaxis-distribution/` after a version tag is
 built. Debian/Ubuntu users can add:
 
-```text
-deb [trusted=yes] https://imattau.github.io/hypotaxis-distribution/deb stable main
+```bash
+curl -fsSL https://imattau.github.io/hypotaxis-distribution/deb/hypotaxis-archive-keyring.asc \
+  | sudo tee /usr/share/keyrings/hypotaxis-archive-keyring.asc >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/hypotaxis-archive-keyring.asc] https://imattau.github.io/hypotaxis-distribution/deb stable main" \
+  | sudo tee /etc/apt/sources.list.d/hypotaxis.list >/dev/null
+sudo apt update && sudo apt install hypotaxis
 ```
 
 RPM-based users can create a repo file pointing at:
@@ -52,3 +56,7 @@ RPM-based users can create a repo file pointing at:
 ```text
 https://imattau.github.io/hypotaxis-distribution/rpm/
 ```
+
+The APT `Release` file and RPM repository metadata are signed with the
+Hypotaxis release key. The public key is published alongside the Debian
+repository.

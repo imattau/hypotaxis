@@ -1,0 +1,21 @@
+# Prop profile format
+#
+# One prop per line: "Name: description" - same format as character and
+# location profiles.
+#   - Name must exactly match how the object is named in your prose
+#     (case-sensitive).
+#   - Description should describe the object's visual appearance (material,
+#     size, distinguishing marks).
+#   - Blank lines and lines starting with # (like this one) are ignored.
+#
+# Props are NOT the same as locations, even though the file format matches.
+# A location is a whole backdrop and gets image-conditioned via IP-Adapter;
+# a prop is a small portable object and is only text-anchored into the
+# generation prompt whenever it's tagged on a panel. Testing showed that
+# generating an image-conditioning reference for a small object the same
+# way as a location (a "wide establishing shot") produces a cluttered,
+# unusable scene rather than a clean single-object reference - so don't put
+# small handheld objects in the location profile file, put them here.
+
+Letter: a folded handwritten letter with a wax seal, worn at the edges
+Key: a small tarnished brass key on a frayed ribbon

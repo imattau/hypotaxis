@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable
@@ -24,6 +25,8 @@ for _name, _boxes in LAYOUTS.items():
 # preference order for page pacing: favor typical page sizes over cramming
 # everything into one big grid just because the count happens to divide evenly
 _SUPPORTED_COUNTS = [c for c in (3, 4, 2, 9) if c in _TEMPLATES_BY_COUNT]
+_DATASET_LOCK = threading.Lock()
+_MAX_SEGMENT_SENTENCES = 1500
 
 
 def split_sentences(text: str) -> list[str]:
@@ -94,6 +97,10 @@ def segment_text(
     panel for as long as the budget allows.
     """
     sentences = split_sentences(text)
+    if not sentences:
+        raise ValueError("story text must contain at least one sentence")
+    if len(sentences) > _MAX_SEGMENT_SENTENCES:
+        raise ValueError(f"story is too long; maximum is {_MAX_SEGMENT_SENTENCES} sentences")
     if len(sentences) <= 1:
         return sentences
 
@@ -129,16 +136,14 @@ def segment_text(
     return [" ".join(sentences[lo:hi]) for lo, hi in ranges]
 
 
-def parse_character_profiles(text: str) -> dict[str, str]:
-    """Parse an author-supplied cast sheet: one 'Name: description' per line
-    (blank lines and '#' comments ignored). This is trusted input, so it
-    bypasses both weak points NER has for this domain - it guarantees a
-    character is recognized even if the NER model's training distribution
-    under-represents their name (e.g. non-Western names), and it replaces
-    the bridge LLM's unreliable self-generated appearance descriptions
-    (observed to sometimes return a scene sentence instead of an actual
-    appearance) with the author's own, which also improves the Stage B/
-    Phase 4 reference portraits generated from that description.
+def _parse_profile_sheet(text: str) -> dict[str, str]:
+    """Parse an author-supplied profile sheet: one 'Name: description' per
+    line (blank lines and '#' comments ignored). Trusted input, so it
+    bypasses NER entirely - used both for character cast sheets and for
+    location/prop sheets, since the format and purpose are identical:
+    guarantee an asset is recognized regardless of what automatic detection
+    can find, and seed its registry description/reference image from the
+    author's own words instead of a generated guess.
     """
     profiles: dict[str, str] = {}
     for line in text.splitlines():
@@ -151,6 +156,63 @@ def parse_character_profiles(text: str) -> dict[str, str]:
         if name and description:
             profiles[name] = description
     return profiles
+
+
+_NO_FORM_TAG_RE = re.compile(r"^\[no-form\]\s*", re.IGNORECASE)
+
+
+def parse_character_profiles(text: str) -> tuple[dict[str, str], set[str]]:
+    """See _parse_profile_sheet. Character names have no reliable automatic
+    detection substitute for NER's blind spots (non-Western names, etc.),
+    so this is the primary mitigation for that gap.
+
+    A description starting with the literal tag "[no-form]" marks that
+    character as having no physical/humanoid appearance at all (an AI, a
+    voice, a presence) - returned separately as a set of names, since
+    CharacterRegistry needs to carry this flag too (Stage C runs as a
+    separate invocation from Stage A, sometimes a different day). See
+    backends.py: forcing the normal "character reference portrait, front-
+    facing" template onto something explicitly described as having no body
+    just produces a person anyway (confirmed empirically), so an abstract
+    character skips reference-portrait generation and IP-Adapter
+    conditioning entirely and is text-anchored into the prompt instead,
+    the same way props are.
+    """
+    raw = _parse_profile_sheet(text)
+    abstract_names: set[str] = set()
+    profiles: dict[str, str] = {}
+    for name, description in raw.items():
+        match = _NO_FORM_TAG_RE.match(description)
+        if match:
+            abstract_names.add(name)
+            description = description[match.end():].strip()
+        profiles[name] = description
+    return profiles, abstract_names
+
+
+def parse_location_profiles(text: str) -> dict[str, str]:
+    """See _parse_profile_sheet. Locations have no automatic detection at
+    all (NER only catches named places like 'Tokyo', not generic-but-
+    important scene settings like 'the abandoned mill'), so this is the
+    only way to register them, not just a mitigation."""
+    return _parse_profile_sheet(text)
+
+
+def parse_prop_profiles(text: str) -> dict[str, str]:
+    """See _parse_profile_sheet. Props are kept as a separate registry from
+    locations even though the file format is identical, because they're
+    handled completely differently downstream: a location is a whole
+    backdrop and gets image-conditioned via IP-Adapter, while a small
+    portable object gets only text-anchored into the generation prompt (see
+    backends.py) - testing showed a 'wide establishing shot' reference for
+    a small prop produces a cluttered, unusable scene rather than a clean
+    single-object reference, and whole-image IP-Adapter conditioning on
+    such a reference would distort a panel's entire composition around one
+    incidental object. This also avoids a real structural problem: a
+    location and a prop routinely appear in the same panel ('the letter, in
+    the mill'), and if they shared one registry/slot, that case would fall
+    into 'multiple names - skip conditioning entirely'."""
+    return _parse_profile_sheet(text)
 
 
 @lru_cache(maxsize=None)
@@ -175,16 +237,108 @@ def extract_person_entities(text: str) -> list[str]:
     return names
 
 
-def characters_in_chunk(chunk: str, known_characters: list[str]) -> list[str]:
-    """Which of the chapter's known characters (from the whole-text NER
-    pass) are actually mentioned in this panel's chunk - a simple substring
-    check, since we already know these are real names and just need to
-    know where each one appears.
+def _merge_person_aliases(names: list[str], priority_names: list[str] | None = None) -> tuple[list[str], dict[str, str]]:
+    """NER emits a separate span for each way a person is referred to across
+    a document - "Dr. Mina Park", "Mina Park", "Park" - plus stray possessive
+    spans like "Mina Park's". Left unmerged, each becomes its own bogus
+    character. Collapse same-cluster spans into one canonical (longest) name,
+    picking the longest form first so shorter aliases get absorbed into it
+    rather than the reverse.
+
+    priority_names (author-supplied character profiles / already-registered
+    names) are always canonical and never absorbed into an NER-derived form,
+    even a longer one - spaCy's PERSON span usually drops a leading title
+    ("Dr."), so an NER hit like "Mina Park" needs to merge into the profile's
+    "Dr. Mina Park" rather than the reverse.
+
+    Returns (canonical_names, alias_to_canonical) rather than just a merged
+    list: a chunk of prose that only uses the short form ("Park") needs to
+    still be tagged under the canonical name, so callers must check both.
     """
-    return [name for name in known_characters if name in chunk]
+    cleaned = [n[:-2] if n.endswith("'s") else n for n in names]
+    cleaned = [n.strip() for n in cleaned if n.strip()]
+    unique = list(dict.fromkeys(cleaned))
+    by_length = sorted(unique, key=len, reverse=True)
+
+    canonical_forms: list[str] = list(dict.fromkeys(priority_names or []))
+    alias_to_canonical: dict[str, str] = {name: name for name in canonical_forms}
+    for name in by_length:
+        if name in alias_to_canonical:
+            continue
+        owner = next(
+            (c for c in canonical_forms if re.search(rf"\b{re.escape(name)}\b", c, re.IGNORECASE)),
+            None,
+        )
+        alias_to_canonical[name] = owner if owner is not None else name
+        if owner is None:
+            canonical_forms.append(name)
+
+    ordered_canonical: list[str] = []
+    for name in unique:
+        canon = alias_to_canonical[name]
+        if canon not in ordered_canonical:
+            ordered_canonical.append(canon)
+
+    aliases_only = {alias: canon for alias, canon in alias_to_canonical.items() if alias != canon}
+    return ordered_canonical, aliases_only
+
+
+def names_in_chunk(chunk: str, known_names: list[str]) -> list[str]:
+    """Which of a known set of names (characters or locations/props) are
+    actually mentioned in this panel's chunk - a simple substring check,
+    since we already know these are real names and just need to know where
+    each one appears.
+    """
+    return [name for name in known_names if name in chunk]
+
+
+# kept as an alias: existing call sites/tests refer to this by its original,
+# character-specific name
+characters_in_chunk = names_in_chunk
 
 
 _QUOTE_RE = re.compile(r'"([^"]+)"')
+
+_QUOTE_NORMALIZE_TABLE = str.maketrans({
+    "“": '"',  # left double quotation mark
+    "”": '"',  # right double quotation mark
+    "‘": "'",  # left single quotation mark
+    "’": "'",  # right single quotation mark / apostrophe
+})
+
+
+def _normalize_quotes(text: str) -> str:
+    """Word/Docs/Notes/many markdown editors write curly typographic quotes
+    by default - straight to _QUOTE_RE (which only matches straight `"`)
+    those come through as plain prose with no detectable dialogue at all.
+    Normalizing to straight quotes/apostrophes up front (before any other
+    Stage A processing) fixes dialogue extraction and also stops spaCy's
+    NER from occasionally splitting a curly-apostrophe possessive like
+    "Jules’s" into its own bogus entity distinct from "Jules"."""
+    return text.translate(_QUOTE_NORMALIZE_TABLE)
+
+
+def _propn_subject_of_any_verb(sentence, known_characters: list[str]) -> str | None:
+    for tok in sentence:
+        if tok.pos_ != "VERB":
+            continue
+        subject = next((c for c in tok.children if c.dep_ in ("nsubj", "nsubjpass")), None)
+        if subject is None:
+            continue
+        candidate = subject
+        if subject.pos_ != "PROPN":
+            # "Dr. Park's face hovered..." - subject is "face" (NOUN), with
+            # "Park" attached to it as a possessive modifier. The sentence
+            # is about the possessor, not the body part/object, so treat a
+            # possessive PROPN child as the effective subject too.
+            candidate = next((c for c in subject.children if c.dep_ == "poss" and c.pos_ == "PROPN"), None)
+            if candidate is None:
+                continue
+        for name in known_characters:
+            if candidate.text in name or name in candidate.text:
+                return name
+        return candidate.text
+    return None
 
 
 def _resolve_speaker_via_parse(doc, quote_start: int, quote_end: int, known_characters: list[str]) -> str | None:
@@ -194,11 +348,26 @@ def _resolve_speaker_via_parse(doc, quote_start: int, quote_end: int, known_char
     happens to sit textually closer to the quote (the failure mode of a
     nearest-name heuristic, e.g. Ren calling out 'Aiko?' was previously
     misattributed to Aiko since her name is the only one adjacent to the
-    quote). Returns None (not 'unknown') when the subject is a pronoun or
-    no reporting verb is found, so the caller can fall back to its own
-    heuristics rather than treating an unresolved pronoun as a name.
+    quote).
+
+    Falls back to a second check when the quote's own sentence has no
+    reporting verb at all - a very common prose pattern is a short action
+    beat immediately before a bare quote ('Jules shrugged. "I dreamed."'),
+    where "shrugged" isn't a reporting verb but its subject is still
+    unambiguously the speaker of the quote that follows. Only applies when
+    the beat sentence is immediately adjacent to the quote's sentence (nothing
+    but whitespace between them) - a name appearing in some earlier,
+    unrelated sentence is not the same signal.
+
+    Returns None (not 'unknown') when neither check resolves to a name, so
+    the caller can fall back to its own heuristics rather than treating an
+    unresolved pronoun as a name.
     """
-    sentence = next((s for s in doc.sents if s.start_char <= quote_start and s.end_char >= quote_end), None)
+    # the sentence containing the quote's *opening* - not one spanning the
+    # whole quote, since spaCy splits a multi-sentence quoted line ("Nova is
+    # programmed... Maybe she's responding...") into multiple sentences of
+    # its own, and no single sentence would span end-to-end in that case
+    sentence = next((s for s in doc.sents if s.start_char <= quote_start < s.end_char), None)
     if sentence is None:
         return None
     for tok in sentence:
@@ -213,6 +382,15 @@ def _resolve_speaker_via_parse(doc, quote_start: int, quote_end: int, known_char
             if subject.text in name or name in subject.text:
                 return name
         return subject.text
+
+    prev_sentence = None
+    for s in doc.sents:
+        if s.end_char <= sentence.start_char:
+            prev_sentence = s
+        else:
+            break
+    if prev_sentence is not None and sentence.start_char - prev_sentence.end_char <= 2:
+        return _propn_subject_of_any_verb(prev_sentence, known_characters)
     return None
 
 
@@ -225,15 +403,41 @@ def split_dialogue(
     # different beats once panel-budget compression merges adjacent chunks
     # together, and the first-named one isn't necessarily who's speaking
     last_speaker = default_speaker or (characters[0] if characters else "unknown")
+    # the most recent speaker *distinct* from last_speaker - not simply the
+    # previous line's speaker, since two consecutive lines can genuinely
+    # belong to the same person ("Maybe." Jules hesitated. "It didn't feel
+    # programmed.") and that shouldn't erase the record of who the other
+    # active participant is for ping-pong alternation below
+    other_speaker: str | None = None
+    prior_quote_spans: list[tuple[int, int]] = []
     for match in _QUOTE_RE.finditer(chunk):
         text = match.group(1).strip()
         speaker = None
         if doc is not None:
             speaker = _resolve_speaker_via_parse(doc, match.start(), match.end(), characters)
         if speaker is None:
-            window = chunk[max(0, match.start() - 40) : match.start()]
-            speaker = next((name for name in reversed(characters) if name in window), last_speaker)
+            # never look further back than the immediately preceding quote -
+            # a name attached to an earlier beat ("Jules shrugged.") is that
+            # beat's attribution cue, not a floating cue that should keep
+            # bleeding forward into every later quote within 40 chars of it
+            prior_quote_end = prior_quote_spans[-1][1] if prior_quote_spans else 0
+            window_start = max(prior_quote_end, match.start() - 40)
+            window = chunk[window_start : match.start()]
+            speaker = next((name for name in reversed(characters) if name in window), None)
+        if speaker is None and other_speaker is not None:
+            # no explicit signal at all for this line - unattributed dialogue
+            # in fiction overwhelmingly alternates between the two active
+            # speakers rather than one character monologuing indefinitely, so
+            # flip to the other active participant instead of just repeating
+            # last_speaker (which produced long wrong streaks on real
+            # dialogue-dense chapters - see the pipeline review)
+            speaker = other_speaker
+        if speaker is None:
+            speaker = last_speaker
         lines.append(DialogueLine(speaker=speaker, text=text, kind="speech"))
+        prior_quote_spans.append((match.start(), match.end()))
+        if speaker != last_speaker:
+            other_speaker = last_speaker
         last_speaker = speaker
     return lines
 
@@ -253,6 +457,8 @@ def _merge_panel(base: Panel, extra: Panel) -> Panel:
     return Panel(
         scene_description=f"{base.scene_description} {extra.scene_description}",
         characters=list(dict.fromkeys(base.characters + extra.characters)),
+        locations=list(dict.fromkeys(base.locations + extra.locations)),
+        props=list(dict.fromkeys(base.props + extra.props)),
         camera_hint=base.camera_hint,
         dialogue=base.dialogue + extra.dialogue,
     )
@@ -286,7 +492,8 @@ def pack_into_pages(panels: list[Panel]) -> list[Page]:
 _CAPTION_PROMPT = """You are converting prose fiction into a single manga panel description for an image generator.
 Passage: {chunk}
 Characters present: {characters}
-Write ONE sentence, under 25 words, describing only the visual moment to draw (setting, characters, action, expression). Do not include dialogue. Do not add characters not listed."""
+Known appearance (mention only briefly if relevant, do not dwell on it): {appearance_notes}
+Write ONE sentence, under 25 words, describing only the setting, action, and expression stated in the passage. Do not invent objects, locations, or events not in the passage. Do not include dialogue. Do not add characters not listed."""
 
 _DESCRIPTION_PROMPT = """Passage: {chunk}
 Based only on this passage, describe {name}'s visual appearance in under 15 words (hair, clothing, build). If not stated, invent one simple consistent appearance. Reply with the description only."""
@@ -295,8 +502,9 @@ Based only on this passage, describe {name}'s visual appearance in under 15 word
 def _append_jsonl(path: str | Path, record: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as f:
-        f.write(json.dumps(record) + "\n")
+    with _DATASET_LOCK:
+        with path.open("a") as f:
+            f.write(json.dumps(record) + "\n")
 
 
 def adapt_story(
@@ -309,6 +517,11 @@ def adapt_story(
     dataset_path: str | Path | None = None,
     on_progress: "Callable[[str], None] | None" = None,
     character_profiles: dict[str, str] | None = None,
+    abstract_characters: set[str] | None = None,
+    location_registry: CharacterRegistry | None = None,
+    location_profiles: dict[str, str] | None = None,
+    prop_registry: CharacterRegistry | None = None,
+    prop_profiles: dict[str, str] | None = None,
 ) -> Story:
     """dataset_path: if given, append every {input, characters, target} caption
     example produced by the bridge LLM to this JSONL file (Phase 3 harvesting) -
@@ -323,15 +536,47 @@ def adapt_story(
     cast sheet (see parse_character_profiles) - these names are guaranteed
     to be recognized regardless of NER, and their descriptions seed the
     registry directly instead of being generated by the bridge LLM.
+
+    abstract_characters: optional set of names (the second element
+    parse_character_profiles returns) with no physical/humanoid appearance -
+    recorded on the registry so Stage C can skip portrait/IP-Adapter
+    conditioning for them (see CharacterRegistry.set_is_abstract).
+
+    location_registry/location_profiles: same idea as character_profiles,
+    but for locations (see parse_location_profiles). Unlike characters,
+    locations have no automatic-detection fallback at all - NER only
+    catches named places, not generic-but-important settings like "the
+    abandoned mill" - so a location only ever gets tagged on a panel if it
+    was listed in location_profiles.
+
+    prop_registry/prop_profiles: same mechanism as locations (see
+    parse_prop_profiles), but kept as a separate registry/tag since props
+    are handled differently downstream - see parse_prop_profiles for why.
     """
 
     def report(msg: str) -> None:
         if on_progress is not None:
             on_progress(msg)
 
+    text = _normalize_quotes(text)
+
     for name, description in (character_profiles or {}).items():
         if registry.get(name) is None:
             registry.set_description(name, description)
+    for name in abstract_characters or ():
+        registry.set_is_abstract(name, True)
+
+    if location_registry is not None:
+        for name, description in (location_profiles or {}).items():
+            if location_registry.get(name) is None:
+                location_registry.set_description(name, description)
+    known_locations = list(location_profiles or {})
+
+    if prop_registry is not None:
+        for name, description in (prop_profiles or {}).items():
+            if prop_registry.get(name) is None:
+                prop_registry.set_description(name, description)
+    known_props = list(prop_profiles or {})
 
     report("segmenting story into panels")
     budget = target_panel_count(len(text.split()))
@@ -342,27 +587,50 @@ def adapt_story(
     # spaCy too little context to reliably recognize names; author-supplied
     # profile names are folded in unconditionally, ahead of NER results, so
     # they're never missed regardless of what the NER model does or doesn't
-    # recognize
-    known_characters = list(
-        dict.fromkeys(list(character_profiles or {}) + list(registry.all()) + extract_person_entities(text))
-    )
+    # recognize. NER hits that collide with a known location name are
+    # dropped - e.g. spaCy's PERSON tagger false-positived on "Mill" in
+    # testing, and an author-confirmed location name is authoritative over
+    # an automatic (and here, wrong) NER guess for the same string.
+    person_entities = [
+        name for name in extract_person_entities(text) if name not in known_locations and name not in known_props
+    ]
+    # collapse NER spans that refer to the same person under different
+    # wording ("Dr. Mina Park" / "Mina Park" / "Park") into one canonical
+    # name - person_aliases lets a chunk using only the short form still
+    # get tagged under the canonical name (see _merge_person_aliases).
+    # Author-supplied/already-registered names are given as priority so an
+    # NER-derived variant merges into e.g. a profile's "Dr. Mina Park"
+    # rather than creating its own separate canonical form.
+    already_known = list(dict.fromkeys(list(character_profiles or {}) + list(registry.all())))
+    person_entities, person_aliases = _merge_person_aliases(person_entities, priority_names=already_known)
+    known_characters = list(dict.fromkeys(already_known + person_entities))
 
     last_speaker: str | None = next(iter(known_characters), None)
     for chunk_index, chunk in enumerate(chunks):
         report(f"writing panel {chunk_index + 1}/{len(chunks)}")
-        characters = characters_in_chunk(chunk, known_characters)
+        characters = names_in_chunk(chunk, known_characters)
+        for alias, canonical in person_aliases.items():
+            if canonical in known_characters and canonical not in characters and alias in chunk:
+                characters.append(canonical)
+        locations = names_in_chunk(chunk, known_locations)
+        props = names_in_chunk(chunk, known_props)
         for name in characters:
             if registry.get(name) is None:
                 description = llm.generate(_DESCRIPTION_PROMPT.format(chunk=chunk, name=name), max_new_tokens=30)
                 registry.set_description(name, description)
 
         character_notes = "; ".join(f"{name} ({registry.get(name).description})" for name in characters)
-        caption_input = f"{chunk}\nKnown appearances: {character_notes}" if character_notes else chunk
+        # kept as a separate prompt field rather than folded into the passage text -
+        # when it was part of "Passage", the tiny LLM tended to fixate on restating
+        # appearance instead of the scene's actual action (see caption quality notes)
         caption = llm.generate(
-            _CAPTION_PROMPT.format(chunk=caption_input, characters=", ".join(characters) or "none"),
+            _CAPTION_PROMPT.format(
+                chunk=chunk, characters=", ".join(characters) or "none", appearance_notes=character_notes or "none"
+            ),
             max_new_tokens=60,
         )
         if dataset_path is not None:
+            caption_input = f"{chunk}\nKnown appearances: {character_notes}" if character_notes else chunk
             _append_jsonl(
                 dataset_path,
                 {"input": caption_input, "characters": characters, "target": caption},
@@ -375,7 +643,16 @@ def adapt_story(
         elif dialogue:
             last_speaker = dialogue[-1].speaker
         camera_hint = guess_camera_hint(chunk, len(characters))
-        panels.append(Panel(scene_description=caption, characters=characters, camera_hint=camera_hint, dialogue=dialogue))
+        panels.append(
+            Panel(
+                scene_description=caption,
+                characters=characters,
+                locations=locations,
+                props=props,
+                camera_hint=camera_hint,
+                dialogue=dialogue,
+            )
+        )
 
     report("laying out pages")
     pages = pack_into_pages(panels)
