@@ -16,6 +16,12 @@ required cloud APIs.
 
 A web studio UI (FastAPI + vanilla JS) sits on top for running the whole flow visually.
 
+Stage A respects a manuscript's own structure rather than treating it as one undifferentiated
+block of prose: markdown scene breaks (`---`, `***`, `___` alone on a line) are hard panel
+boundaries no single panel can straddle, each independently panel-budgeted by its share of the
+chapter's word count; chapter headings (`# ...`) and blockquote markers (`> `) are stripped
+before segmentation so they don't pollute a caption or a character-name detection pass.
+
 ## Setup
 
 Install what you need — these are split so you don't have to pull in the diffusion stack

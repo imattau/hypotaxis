@@ -13,6 +13,8 @@ from __future__ import annotations
 from manga_pipeline.story_adapt import (
     _merge_person_aliases,
     _normalize_quotes,
+    _split_on_scene_breaks,
+    _strip_markdown_structure,
     get_nlp,
     guess_camera_hint,
     names_in_chunk,
@@ -58,6 +60,38 @@ def test_merge_person_aliases_no_false_merge_for_unrelated_names():
     canonical, aliases = _merge_person_aliases(["Aiko", "Ren"])
     assert canonical == ["Aiko", "Ren"]
     assert aliases == {}
+
+
+def test_strip_markdown_structure_removes_headers_and_blockquote_markers():
+    text = "# Chapter 1: Soft Reset\n\nThe day began.\n\n> A note from Nova.\n"
+    stripped = _strip_markdown_structure(text)
+    assert "# Chapter" not in stripped
+    assert ">" not in stripped
+    assert "The day began." in stripped
+    assert "A note from Nova." in stripped
+
+
+def test_strip_markdown_structure_leaves_scene_breaks_intact():
+    # scene breaks are handled separately by _split_on_scene_breaks - they
+    # must survive this pass as a boundary signal, not get deleted here
+    text = "First scene.\n\n---\n\nSecond scene."
+    assert "---" in _strip_markdown_structure(text)
+
+
+def test_split_on_scene_breaks_separates_sections():
+    text = "First scene.\n\n---\n\nSecond scene.\n\n***\n\nThird scene."
+    assert _split_on_scene_breaks(text) == ["First scene.", "Second scene.", "Third scene."]
+
+
+def test_split_on_scene_breaks_no_break_returns_one_section():
+    assert _split_on_scene_breaks("Just one scene, no breaks.") == ["Just one scene, no breaks."]
+
+
+def test_split_on_scene_breaks_does_not_match_prose_dashes():
+    # a real sentence using dashes for punctuation (not a standalone
+    # scene-break line) must not get treated as a scene boundary
+    text = "It was—unexpectedly—quiet. The end."
+    assert _split_on_scene_breaks(text) == ["It was—unexpectedly—quiet. The end."]
 
 
 def test_names_in_chunk_substring_match():

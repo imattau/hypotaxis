@@ -136,6 +136,60 @@ def segment_text(
     return [" ".join(sentences[lo:hi]) for lo, hi in ranges]
 
 
+_MARKDOWN_HEADER_RE = re.compile(r"^#{1,6}[ \t]+.*$", re.MULTILINE)
+_BLOCKQUOTE_MARKER_RE = re.compile(r"^[ \t]*>[ \t]?", re.MULTILINE)
+_SCENE_BREAK_RE = re.compile(r"^[ \t]*(?:[-*_][ \t]*){3,}$", re.MULTILINE)
+
+
+def _strip_markdown_structure(text: str) -> str:
+    """Strip markdown structural markup that isn't narrative prose - a
+    chapter heading ("# Chapter 1: Soft Reset") or a blockquote marker
+    ("> ") would otherwise get swept into the sentence stream as literal
+    text, polluting the first real sentence or an in-story quoted note
+    (found on a real manuscript: the chapter heading became part of the
+    opening sentence's embedding/caption input). Scene-break markers
+    ("---", "***", "___" alone on a line) are handled separately by
+    _split_on_scene_breaks, not here, since they need to survive as
+    boundary signals rather than just being deleted.
+    """
+    text = _MARKDOWN_HEADER_RE.sub("", text)
+    text = _BLOCKQUOTE_MARKER_RE.sub("", text)
+    return text
+
+
+def _split_on_scene_breaks(text: str) -> list[str]:
+    """Split raw prose on standalone scene-break lines ("---", "***", "___")
+    into independent sections. Without this, a scene break is invisible to
+    segment_text's embedding-similarity chunking - it isn't sentence-ending
+    punctuation, so it never creates a chunk boundary on its own, and the
+    scenes on either side of it can still get merged into the same panel
+    during panel-budget compression. Segmenting each section independently
+    (see _segment_with_scene_breaks) makes every scene break a hard
+    boundary no single panel can straddle.
+    """
+    sections = _SCENE_BREAK_RE.split(text)
+    return [s.strip() for s in sections if s.strip()]
+
+
+def _segment_with_scene_breaks(text: str, target_panels: int) -> list[str]:
+    """segment_text(), but scene breaks are hard panel boundaries - see
+    _split_on_scene_breaks. The panel budget is split across sections in
+    proportion to each section's word count, with every non-empty section
+    guaranteed at least one panel."""
+    sections = _split_on_scene_breaks(text)
+    if len(sections) <= 1:
+        return segment_text(sections[0] if sections else text, target_panels=target_panels)
+
+    word_counts = [max(1, len(s.split())) for s in sections]
+    total_words = sum(word_counts)
+    shares = [max(1, round(target_panels * wc / total_words)) for wc in word_counts]
+
+    chunks: list[str] = []
+    for section, share in zip(sections, shares):
+        chunks.extend(segment_text(section, target_panels=share))
+    return chunks
+
+
 def _parse_profile_sheet(text: str) -> dict[str, str]:
     """Parse an author-supplied profile sheet: one 'Name: description' per
     line (blank lines and '#' comments ignored). Trusted input, so it
@@ -595,6 +649,7 @@ def adapt_story(
             on_progress(msg)
 
     text = _normalize_quotes(text)
+    text = _strip_markdown_structure(text)
 
     for name, description in (character_profiles or {}).items():
         if registry.get(name) is None:
@@ -616,7 +671,7 @@ def adapt_story(
 
     report("segmenting story into panels")
     budget = target_panel_count(len(text.split()))
-    chunks = segment_text(text, target_panels=budget)
+    chunks = _segment_with_scene_breaks(text, budget)
     panels: list[Panel] = []
 
     # whole-text NER pass (not per-chunk) since a short isolated chunk gives
