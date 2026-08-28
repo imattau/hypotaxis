@@ -1,0 +1,9 @@
+Fluorescent shop light glinted off exposed wiring as Cyrus lifted the playfield glass away, peering down at the tangle of solenoids beneath the vintage pinball machine's surface. The arcade's oldest cabinet had been dead for a week, and regulars kept asking when it would be fixed.
+
+His shop partner, Wilhelmina, held the schematic diagram up against the machine, tracing the wiring path with one finger while comparing it to what she could see beneath the glass. "The flipper coil looks scorched," she said. "That would explain the dead left flipper everyone's complaining about."
+
+Cyrus reached in carefully and touched the coil, confirming her suspicion with a slight wince at the burnt smell still lingering around the component. "Yep, fried," he said. "Good thing we've got a spare in the parts bin from that other machine we scrapped last year."
+
+Wilhelmina dug through the parts bin and found the matching coil, checking its resistance with a multimeter before handing it over to Cyrus for installation. "Same specs," she confirmed. "Should drop right in without needing to rewire anything."
+
+Cyrus swapped the coil carefully, testing the flipper's response with a few manual presses before replacing the playfield glass. "Let's fire her up," he said, flipping the power switch and watching the old machine hum back to life, lights flickering across the backglass.

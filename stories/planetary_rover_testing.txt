@@ -1,0 +1,9 @@
+Simulated Martian regolith crunched under the rover's wheels as Anouk guided the prototype through the test facility's obstacle course, monitoring its performance against the mission's demanding terrain requirements. Launch was scheduled for eighteen months out.
+
+Her engineering partner, Fitzwilliam, tracked telemetry data on his laptop, watching for any signs of mechanical stress as the rover navigated a particularly challenging simulated crater edge. "Wheel torque looks nominal," he said. "No concerning spikes yet."
+
+Anouk guided the rover through the crater's steep incline, watching its suspension system compensate for the uneven terrain that mimicked conditions the actual mission would eventually encounter. "She's handling this beautifully," she said, satisfaction clear in her voice.
+
+Fitzwilliam continued monitoring the data stream, flagging a minor anomaly in one wheel's power consumption that would need investigation before the design could be finalized for the actual mission hardware. "Small flag on wheel three," he noted.
+
+Anouk brought the rover to a stop and began reviewing Fitzwilliam's flagged data, already considering potential causes for the anomaly he'd identified during this critical testing phase. "Let's pull the logs," she said. "Better to catch this now than after launch."

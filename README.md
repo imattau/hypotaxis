@@ -153,9 +153,36 @@ honestly rather than papered over:
   text-only conditioning but not perfect — an anime-tuned IP-Adapter or per-character LoRA
   would likely close the remaining gap.
 - A LoRA-fine-tuned captioner (`train_captioner.py`, intended to shrink/replace the Stage A
-  bridge LLM) is implemented and trains successfully, but doesn't yet have enough harvested
-  training data (`data/caption_pairs.jsonl`, growing automatically from normal Stage A use)
-  to outperform the LLM it's meant to replace.
+  bridge LLM) is implemented and trains on `data/caption_pairs_curated.jsonl`, a 2,000-example
+  human-reviewed dataset built via `curate_dataset.py` (see "Curating a clean caption dataset"
+  below). Default base model is `google-t5/t5-base`, chosen over `t5-small` after a direct
+  comparison at the same dataset size showed a clear quality gap (eval loss 1.72 vs. 2.17,
+  and t5-small visibly confusing subjects in multi-character sentences that t5-base got right).
+  It is not yet wired into Stage A's actual caption generation - that integration is still
+  outstanding. `data/caption_pairs.jsonl`, the older auto-harvested dataset that still grows
+  from normal Stage A use, remains unreviewed and untrusted for training (its targets are the
+  bridge LLM's own, sometimes-hallucinated output).
+
+## Curating a clean caption dataset
+
+The auto-harvested dataset above trains a LoRA to imitate the bridge LLM's mistakes along with
+everything else, since its targets were never reviewed. `curate_dataset.py` generates review
+candidates instead: it runs a deliberately *stronger* teacher model (`Qwen/Qwen2.5-7B-Instruct`
+by default, loaded in 4-bit so it fits alongside everything else on a modest card) over one or
+more story text files and writes `{input, characters, target}` candidates to
+`data/caption_candidates.jsonl` - the same shape `train_captioner.py` expects, but not yet
+trusted.
+
+```bash
+pip install -r requirements-story-adapt.txt -r requirements-training.txt
+python curate_dataset.py stories/*.txt
+```
+
+Review candidates in the studio's **Dataset** tab: each one shows the source passage and an
+editable caption, with Accept (optionally after editing) or Reject. Accepted captions go to
+`data/caption_pairs_curated.jsonl` - the clean dataset `train_captioner.py` trains on by
+default. It currently holds 2,000 reviewed examples across ~250 short original stories
+(`stories/*.txt`), spanning a deliberately wide range of settings and character names.
 
 ## Repository layout
 

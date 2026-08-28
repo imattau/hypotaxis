@@ -1,14 +1,17 @@
 const main = document.getElementById("main");
 const navLibrary = document.getElementById("nav-library");
 const navNew = document.getElementById("nav-new");
+const navDataset = document.getElementById("nav-dataset");
 
 function setNav(active) {
   navLibrary.classList.toggle("active", active === "library");
   navNew.classList.toggle("active", active === "new");
+  navDataset.classList.toggle("active", active === "dataset");
 }
 
 navLibrary.addEventListener("click", showLibrary);
 navNew.addEventListener("click", showNewStory);
+navDataset.addEventListener("click", showDatasetCuration);
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -64,6 +67,93 @@ function escapeHtml(text) {
   const div = document.createElement("div");
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ---------- Dataset Curation ----------
+
+async function showDatasetCuration() {
+  setNav("dataset");
+  main.innerHTML = "<p class='empty-state'>Loading candidates...</p>";
+  const resp = await api("/api/dataset/candidates?limit=1");
+  main.innerHTML = "";
+  main.appendChild(el(`<div class="section-title">Dataset Curation</div>`));
+  main.appendChild(
+    el(`
+    <div class="status-line">
+      Reviewing teacher-generated caption candidates for the Phase 3 LoRA captioner
+      (see curate_dataset.py). Accept a candidate as-is, edit it first, or reject it -
+      accepted captions go to data/caption_pairs_curated.jsonl, the clean dataset the
+      LoRA trainer should eventually use instead of the noisy auto-harvested one.
+    </div>
+  `)
+  );
+  const countsHolder = el(`<div class="status-line" id="dataset-counts"></div>`);
+  main.appendChild(countsHolder);
+  const queueHolder = el(`<div id="dataset-queue"></div>`);
+  main.appendChild(queueHolder);
+  renderDatasetCounts(countsHolder, resp);
+  renderCandidateQueue(queueHolder, resp);
+}
+
+function renderDatasetCounts(holder, resp) {
+  holder.textContent = `${resp.pending_count} pending review · ${resp.curated_count} curated so far`;
+}
+
+function renderCandidateQueue(holder, resp) {
+  holder.innerHTML = "";
+  if (resp.candidates.length === 0) {
+    holder.appendChild(
+      el(
+        `<p class="empty-state">No pending candidates. Run curate_dataset.py against some story text files to generate more.</p>`
+      )
+    );
+    return;
+  }
+  const candidate = resp.candidates[0];
+  const card = el(`
+    <div class="card">
+      <label>Source passage${candidate.characters && candidate.characters.length ? ` (characters: ${escapeHtml(candidate.characters.join(", "))})` : ""}</label>
+      <div class="desc">${escapeHtml(candidate.input)}</div>
+      <label>Candidate caption</label>
+      <textarea id="candidate-target">${escapeHtml(candidate.target)}</textarea>
+      <div class="row panel-edit-actions">
+        <button class="btn" id="candidate-accept">Accept</button>
+        <button class="btn secondary danger" id="candidate-reject">Reject</button>
+      </div>
+      <div class="status-line" id="candidate-status"></div>
+    </div>
+  `);
+
+  const status = card.querySelector("#candidate-status");
+
+  card.querySelector("#candidate-accept").addEventListener("click", async () => {
+    status.classList.remove("error");
+    status.textContent = "Saving...";
+    try {
+      await api(`/api/dataset/candidates/${candidate.index}/accept`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: card.querySelector("#candidate-target").value }),
+      });
+      showDatasetCuration();
+    } catch (e) {
+      status.textContent = "Error: " + e.message;
+      status.classList.add("error");
+    }
+  });
+
+  card.querySelector("#candidate-reject").addEventListener("click", async () => {
+    status.textContent = "Rejecting...";
+    try {
+      await api(`/api/dataset/candidates/${candidate.index}/reject`, { method: "POST" });
+      showDatasetCuration();
+    } catch (e) {
+      status.textContent = "Error: " + e.message;
+      status.classList.add("error");
+    }
+  });
+
+  holder.appendChild(card);
 }
 
 // ---------- New Story ----------

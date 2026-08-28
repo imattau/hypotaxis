@@ -24,8 +24,26 @@ from manga_pipeline.story_adapt import (
     parse_character_profiles,
     parse_location_profiles,
     split_dialogue,
+    split_sentences,
 )
 from manga_pipeline.schema import DialogueLine, Panel
+
+
+def test_split_sentences_does_not_split_on_title_abbreviation():
+    # regression: "Dr. Osei jogged..." used to fragment into "...as Dr."
+    # + "Osei jogged..." because the naive period-based splitter treated
+    # the abbreviation's period as a sentence boundary - found via a real
+    # generated caption for the orphaned "Dr." fragment coming out useless
+    text = "Fluorescent lights buzzed overhead as Dr. Osei jogged down the hallway. She reached bed six."
+    assert split_sentences(text) == [
+        "Fluorescent lights buzzed overhead as Dr. Osei jogged down the hallway.",
+        "She reached bed six.",
+    ]
+
+
+def test_split_sentences_still_splits_normal_sentences():
+    text = "The rain fell. Kessa walked home."
+    assert split_sentences(text) == ["The rain fell.", "Kessa walked home."]
 
 
 def test_normalize_quotes_converts_curly_to_straight():

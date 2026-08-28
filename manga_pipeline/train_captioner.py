@@ -50,7 +50,7 @@ def to_examples(records: list[dict]) -> list[dict]:
 def train(
     dataset_path: str | Path,
     output_dir: str | Path,
-    base_model: str = "google-t5/t5-small",
+    base_model: str = "google-t5/t5-base",
     epochs: int = 8,
     min_similarity: float = 0.35,
 ) -> dict:

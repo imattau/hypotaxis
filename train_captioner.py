@@ -12,7 +12,7 @@ def main() -> None:
     )
     parser.add_argument("--dataset", default="data/caption_pairs.jsonl")
     parser.add_argument("--output-dir", default="models/captioner")
-    parser.add_argument("--base-model", default="google-t5/t5-small")
+    parser.add_argument("--base-model", default="google-t5/t5-base")
     parser.add_argument("--epochs", type=int, default=8)
     parser.add_argument("--min-similarity", type=float, default=0.35)
     args = parser.parse_args()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -545,3 +546,78 @@ def dataset_stats():
     with DATASET_PATH.open() as f:
         total = sum(1 for line in f if line.strip())
     return {"total_pairs": total}
+
+
+CANDIDATES_PATH = ROOT / "data" / "caption_candidates.jsonl"
+CURATED_PATH = ROOT / "data" / "caption_pairs_curated.jsonl"
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    records = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line:
+            records.append(json.loads(line))
+    return records
+
+
+def _write_jsonl(path: Path, records: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(r) + "\n" for r in records))
+
+
+def _append_jsonl_record(path: Path, record: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+@app.get("/api/dataset/candidates")
+def list_candidates(limit: int = 20):
+    """Pending teacher-generated caption candidates awaiting human review -
+    see curate_dataset.py, which generates these with a stronger teacher LLM
+    than the production bridge model. Each candidate's position in the file
+    is its id for accept/reject, since a local single-user review queue
+    doesn't need anything sturdier than that."""
+    candidates = _read_jsonl(CANDIDATES_PATH)
+    curated_count = len(_read_jsonl(CURATED_PATH))
+    return {
+        "candidates": [{"index": i, **c} for i, c in enumerate(candidates[:limit])],
+        "pending_count": len(candidates),
+        "curated_count": curated_count,
+    }
+
+
+class CandidateDecision(BaseModel):
+    target: str | None = None  # edited caption text; None keeps the candidate's own target
+    characters: list[str] | None = None
+
+
+@app.post("/api/dataset/candidates/{index}/accept")
+def accept_candidate(index: int, decision: CandidateDecision):
+    candidates = _read_jsonl(CANDIDATES_PATH)
+    if not 0 <= index < len(candidates):
+        raise HTTPException(404, "candidate not found")
+    candidate = candidates.pop(index)
+    curated = {
+        "input": candidate["input"],
+        "characters": decision.characters if decision.characters is not None else candidate.get("characters", []),
+        "target": decision.target.strip() if decision.target is not None else candidate["target"],
+    }
+    if not curated["target"]:
+        raise HTTPException(400, "caption text cannot be empty")
+    _append_jsonl_record(CURATED_PATH, curated)
+    _write_jsonl(CANDIDATES_PATH, candidates)
+    return {"accepted": True, "remaining": len(candidates)}
+
+
+@app.post("/api/dataset/candidates/{index}/reject")
+def reject_candidate(index: int):
+    candidates = _read_jsonl(CANDIDATES_PATH)
+    if not 0 <= index < len(candidates):
+        raise HTTPException(404, "candidate not found")
+    candidates.pop(index)
+    _write_jsonl(CANDIDATES_PATH, candidates)
+    return {"rejected": True, "remaining": len(candidates)}

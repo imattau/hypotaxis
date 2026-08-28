@@ -1,0 +1,9 @@
+Cold night air seeped through the observatory dome as Percival traced the telescope's tracking motor wiring, searching for the fault that had left the mount unable to follow the sky's rotation properly. Tonight's viewing session for the astronomy club was already delayed an hour.
+
+His colleague, Marisol, held a flashlight steady over the motor housing, occasionally passing tools as Percival worked through the diagnostic process methodically. "Any luck finding the issue?" she asked, glancing at the growing line of members waiting outside.
+
+Percival traced a wire back to a loose connector, finding the source of the intermittent tracking failure that had plagued the telescope for the past several sessions. "Found it," he said. "Connector's worked itself loose from the vibration. Should be a quick fix."
+
+Marisol handed him the small screwdriver he needed, watching as he tightened the connection and prepared to test the motor's response to the tracking commands. "Members are getting restless," she said. "Jupiter's rising fast, they don't want to miss it."
+
+Percival finished the repair and powered up the tracking motor, watching with relief as the telescope smoothly began following its target across the darkening sky. "Fixed," he said. "Let's get everyone in here before Jupiter climbs too high to see clearly."

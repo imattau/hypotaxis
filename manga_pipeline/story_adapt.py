@@ -29,10 +29,23 @@ _DATASET_LOCK = threading.Lock()
 _MAX_SEGMENT_SENTENCES = 1500
 
 
+_TITLE_ABBREVIATIONS = ("Dr", "Mr", "Mrs", "Ms", "Prof", "Sr", "Jr", "St", "Capt", "Lt", "Col", "Gen", "Rev", "Hon", "Mt")
+
+
 def split_sentences(text: str) -> list[str]:
     text = re.sub(r"\s+", " ", text.strip())
+    # protect a title abbreviation's period ("Dr. Osei") from being treated
+    # as a sentence boundary - naive period-based splitting mistook it for
+    # one, fragmenting "Dr. Osei jogged..." into "...as Dr." + "Osei
+    # jogged..." (found via real caption-quality testing on generated data:
+    # the orphaned "Dr." fragment produced a useless, ungrounded caption).
+    # \x00 marks a protected space so the split regex below skips it, since
+    # Python's re module doesn't support variable-length lookbehind for the
+    # alternation of abbreviations this would otherwise need.
+    for abbr in _TITLE_ABBREVIATIONS:
+        text = re.sub(rf"\b{abbr}\.\s+", f"{abbr}.\x00", text)
     sentences = re.split(r"(?<=[.!?])\s+", text)
-    return [s.strip() for s in sentences if s.strip()]
+    return [s.replace("\x00", " ").strip() for s in sentences if s.strip()]
 
 
 def score_sentence_importance(sentences: list[str], embeddings) -> list[float]:

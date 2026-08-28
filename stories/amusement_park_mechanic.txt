@@ -1,0 +1,9 @@
+Grease-stained coveralls marked Ferdinand as he crawled beneath the roller coaster's control housing, tracing a faulty sensor wire that had triggered an automatic shutdown twenty minutes before the park's opening. Saturday crowds would be arriving soon, expecting the park's signature ride running.
+
+His maintenance partner, Ottavia, monitored the diagnostic panel from the control booth, calling out sensor readings as Ferdinand worked to isolate the fault beneath the track. "Sensor four's still flagging an error," she said. "Try checking the connection at the junction box."
+
+Ferdinand traced the wire to the junction box she'd mentioned, finding a corroded connection that explained the intermittent fault plaguing the ride all week. "Found it," he said. "Corrosion's eaten through part of the contact. Replacing this should fix it."
+
+Ottavia watched the diagnostic panel as Ferdinand worked, ready to confirm the fix once he'd finished the repair and reset the system for testing. "Take your time," she said. "Better a short delay than a ride malfunction with guests aboard."
+
+Ferdinand finished the repair and signaled for a system reset, watching through the housing's access panel as the sensor's error light finally cleared from the diagnostic display. "That's it," he said. "Let's run a test cycle before we open the gates."
