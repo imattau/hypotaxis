@@ -26,6 +26,15 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt -r requirements-studio.txt
 
+      - name: Set up Node for frontend verification
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Verify checked-in Studio frontend bundle
+        run: npm ci && npm run build-ui && git diff --exit-code -- studio/static/app.bundle.js
+
       - name: Run distribution tests
         run: >-
           python -m pytest -q

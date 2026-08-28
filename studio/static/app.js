@@ -467,6 +467,13 @@ async function discoverAdapters(event) {
   try {
     const events = await nostrPool.querySync(relays, { kinds: [30078], limit: 20 });
     const compositionEvents = await nostrPool.querySync(relays, { kinds: [30079], limit: 20 });
+    const deletionTargetsEvent = (deletion, artifact) => {
+      if (deletion.pubkey !== artifact.event.pubkey) return false;
+      if (deletion.tags.some((tag) => tag[0] === "e" && tag[1] === artifact.event.id)) return true;
+      const dTag = artifact.event.tags.find((tag) => tag[0] === "d")?.[1];
+      const address = dTag === undefined ? null : `${artifact.event.kind}:${artifact.event.pubkey}:${dTag}`;
+      return address !== null && deletion.tags.some((tag) => tag[0] === "a" && tag[1] === address);
+    };
     let releases = events
       .filter((release) => verifyEvent(release))
       .map((release) => {
@@ -488,9 +495,16 @@ async function discoverAdapters(event) {
     }
     releases = [...newestReleases.values()];
     if (releases.length) {
-      const deletionEvents = (await nostrPool.querySync(relays, { kinds: [5], "#e": releases.map((release) => release.event_id), limit: 100 }))
+      const revocationResults = await Promise.all([
+        nostrPool.querySync(relays, { kinds: [5], "#e": releases.map((release) => release.event_id), limit: 100 }),
+        nostrPool.querySync(relays, { kinds: [5], "#a": releases.map((release) => {
+          const dTag = release.event.tags.find((tag) => tag[0] === "d")?.[1];
+          return dTag === undefined ? null : `${release.event.kind}:${release.event.pubkey}:${dTag}`;
+        }).filter(Boolean), limit: 100 }),
+      ]);
+      const deletionEvents = [...new Map(revocationResults.flat().map((deletion) => [deletion.id, deletion])).values()]
         .filter((deletion) => verifyEvent(deletion));
-      releases = releases.filter((release) => !deletionEvents.some((deletion) => deletion.pubkey === release.creator_pubkey && deletion.tags.some((tag) => tag[0] === "e" && tag[1] === release.event_id)));
+      releases = releases.filter((release) => !deletionEvents.some((deletion) => deletionTargetsEvent(deletion, release)));
       if (!releases.length) {
         status.textContent = "No active verified releases found; checking compositions...";
         results.innerHTML = "<p class='empty-state'>No active Hypotaxis releases found.</p>";
@@ -574,9 +588,18 @@ async function discoverAdapters(event) {
       }
     }
     if (compositions.size) {
-      const compositionDeletionEvents = (await nostrPool.querySync(relays, { kinds: [5], "#e": [...compositions.values()].map((item) => item.event.id), limit: 100 })).filter((deletion) => verifyEvent(deletion));
+      const compositionItems = [...compositions.values()];
+      const compositionRevocationResults = await Promise.all([
+        nostrPool.querySync(relays, { kinds: [5], "#e": compositionItems.map((item) => item.event.id), limit: 100 }),
+        nostrPool.querySync(relays, { kinds: [5], "#a": compositionItems.map((item) => {
+          const dTag = item.event.tags.find((tag) => tag[0] === "d")?.[1];
+          return dTag === undefined ? null : `${item.event.kind}:${item.event.pubkey}:${dTag}`;
+        }).filter(Boolean), limit: 100 }),
+      ]);
+      const compositionDeletionEvents = [...new Map(compositionRevocationResults.flat().map((deletion) => [deletion.id, deletion])).values()]
+        .filter((deletion) => verifyEvent(deletion));
       for (const [key, item] of compositions) {
-        if (compositionDeletionEvents.some((deletion) => deletion.pubkey === item.event.pubkey && deletion.tags.some((tag) => tag[0] === "e" && tag[1] === item.event.id))) compositions.delete(key);
+        if (compositionDeletionEvents.some((deletion) => deletionTargetsEvent(deletion, { event: item.event }))) compositions.delete(key);
       }
     }
     if (compositions.size) {
@@ -636,7 +659,7 @@ async function installRemoteComposition(composition, compositionEvent, releases,
     const result = await api("/api/adapters/composition/install", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ composition, composition_event: compositionEvent, release_events: releases.map((release) => release.event) }),
+      body: JSON.stringify({ composition, composition_event: compositionEvent, release_events: releases.map((release) => release.event), license_acknowledged: true }),
     });
     status.textContent = `Installed ${result.installed.length} component(s).`;
     button.remove();
@@ -727,7 +750,7 @@ async function downloadAdapterTorrent(release, button) {
     const { job_id } = await api("/api/adapters/torrent/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ magnet: release.manifest.distribution.torrent.magnet, manifest: release.manifest, release_event: release.event }),
+      body: JSON.stringify({ magnet: release.manifest.distribution.torrent.magnet, manifest: release.manifest, release_event: release.event, license_acknowledged: true }),
     });
     const poll = async () => {
       const job = await api(`/api/jobs/${job_id}`);
@@ -774,7 +797,7 @@ async function installAdapter(release, button, licenseConfirmed = false) {
     const result = await api("/api/adapters/install", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ manifest: release.manifest, release_event: release.event }),
+      body: JSON.stringify({ manifest: release.manifest, release_event: release.event, license_acknowledged: true }),
     });
     status.textContent = `Installed at ${result.bundle_dir}`;
     button.remove();

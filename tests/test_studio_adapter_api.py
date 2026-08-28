@@ -125,6 +125,13 @@ def test_discover_adapters_returns_valid_release_metadata(monkeypatch):
     assert result["releases"][0]["signature_verified"] is False
 
 
+def test_discover_adapters_strict_signature_mode_requires_coincurve(monkeypatch):
+    monkeypatch.setattr(studio_app, "REQUIRE_NOSTR_SIGNATURES", True)
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    with pytest.raises(studio_app.HTTPException, match="coincurve"):
+        studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+
+
 def test_discover_adapters_requires_relay(monkeypatch):
     with pytest.raises(studio_app.HTTPException, match="relay URL"):
         studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=[]))
@@ -192,6 +199,80 @@ def test_discover_adapters_hides_revoked_compositions(monkeypatch):
     assert result["compositions"] == []
 
 
+def test_discover_adapters_hides_revoked_releases(monkeypatch):
+    from manga_pipeline.adapter_distribution import build_release_event, nostr_event_id
+
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    event = build_release_event(manifest, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    deletion = {"pubkey": "1" * 64, "created_at": 124, "kind": 5, "tags": [["e", event["id"]]], "content": "withdrawn"}
+    deletion["id"] = nostr_event_id(deletion)
+    deletion["sig"] = "2" * 128
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    monkeypatch.setattr(
+        studio_app,
+        "query_nostr_relays",
+        lambda _relays, filters, max_events: [event] if filters[0]["kinds"] == [30078] else [deletion] if filters[0]["kinds"] == [5] else [],
+    )
+
+    result = studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+
+    assert result["releases"] == []
+
+
+def test_discover_adapters_ignores_forged_revocation_when_signatures_available(monkeypatch):
+    from manga_pipeline.adapter_distribution import build_release_event, nostr_event_id
+
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    release = build_release_event(manifest, "1" * 64, 123)
+    release["sig"] = "2" * 128
+    forged_deletion = {"pubkey": "1" * 64, "created_at": 124, "kind": 5, "tags": [["e", release["id"]]], "content": "forged"}
+    forged_deletion["id"] = nostr_event_id(forged_deletion)
+    forged_deletion["sig"] = "3" * 128
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: True)
+    monkeypatch.setattr(studio_app, "verify_schnorr_signature", lambda event: event["kind"] != 5)
+    monkeypatch.setattr(
+        studio_app,
+        "query_nostr_relays",
+        lambda _relays, filters, max_events: [release] if filters[0]["kinds"] == [30078] else [forged_deletion] if filters[0]["kinds"] == [5] else [],
+    )
+
+    result = studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+
+    assert len(result["releases"]) == 1
+
+
+def test_discover_adapters_finds_address_only_revocation(monkeypatch):
+    from manga_pipeline.adapter_distribution import build_release_event, nostr_event_id
+
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    release = build_release_event(manifest, "1" * 64, 123)
+    release["sig"] = "2" * 128
+    address = f"{release['kind']}:{release['pubkey']}:{release['tags'][0][1]}"
+    deletion = {"pubkey": release["pubkey"], "created_at": 124, "kind": 5, "tags": [["a", address]], "content": "withdrawn"}
+    deletion["id"] = nostr_event_id(deletion)
+    deletion["sig"] = "3" * 128
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    monkeypatch.setattr(
+        studio_app,
+        "query_nostr_relays",
+        lambda _relays, filters, max_events: [release] if filters[0]["kinds"] == [30078] else [deletion] if "#a" in filters[0] else [],
+    )
+
+    result = studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+
+    assert result["releases"] == []
+
+
 def test_install_adapter_endpoint_returns_installed_bundle(monkeypatch, tmp_path):
     monkeypatch.setattr(studio_app, "ROOT", tmp_path)
     monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
@@ -206,8 +287,22 @@ def test_install_adapter_endpoint_returns_installed_bundle(monkeypatch, tmp_path
 
     event = build_release_event(event_manifest, "1" * 64, 123)
     event["sig"] = "2" * 128
-    result = studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=event_manifest, release_event=event))
+    result = studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=event_manifest, release_event=event, license_acknowledged=True))
     assert result["installed"] is True
+
+
+def test_install_adapter_requires_license_acknowledgement(monkeypatch):
+    monkeypatch.setattr(studio_app, "install_from_blossom", lambda *_args: pytest.fail("install should not start"))
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    from manga_pipeline.adapter_distribution import build_release_event
+
+    event = build_release_event(manifest, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    with pytest.raises(studio_app.HTTPException, match="license acknowledgement"):
+        studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=manifest, release_event=event))
 
 
 def test_install_adapter_rejects_manifest_event_mismatch(monkeypatch):
@@ -222,7 +317,7 @@ def test_install_adapter_rejects_manifest_event_mismatch(monkeypatch):
     event["sig"] = "2" * 128
     requested_manifest = {**event_manifest, "version": "2.0.0"}
     with pytest.raises(studio_app.HTTPException, match="does not match"):
-        studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=requested_manifest, release_event=event))
+        studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=requested_manifest, release_event=event, license_acknowledged=True))
 
 
 def test_install_adapter_rejects_invalid_signature(monkeypatch):
@@ -238,7 +333,22 @@ def test_install_adapter_rejects_invalid_signature(monkeypatch):
     event = build_release_event(manifest, "1" * 64, 123)
     event["sig"] = "2" * 128
     with pytest.raises(studio_app.HTTPException, match="signature is invalid"):
-        studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=manifest, release_event=event))
+        studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=manifest, release_event=event, license_acknowledged=True))
+
+
+def test_install_adapter_strict_signature_mode_requires_coincurve(monkeypatch):
+    monkeypatch.setattr(studio_app, "REQUIRE_NOSTR_SIGNATURES", True)
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    from manga_pipeline.adapter_distribution import build_release_event
+
+    event = build_release_event(manifest, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    with pytest.raises(studio_app.HTTPException, match="coincurve"):
+        studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=manifest, release_event=event, license_acknowledged=True))
 
 
 def test_install_composition_installs_verified_components(monkeypatch, tmp_path):
@@ -262,7 +372,7 @@ def test_install_composition_installs_verified_components(monkeypatch, tmp_path)
     composition_event["sig"] = "2" * 128
     installed = tmp_path / "models" / "shared_adapters" / "style-1.0.0"
     monkeypatch.setattr(studio_app, "install_from_blossom", lambda _manifest, _root: installed)
-    result = studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, composition_event=composition_event, release_events=[event]))
+    result = studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, composition_event=composition_event, release_events=[event], license_acknowledged=True))
     assert result == {"installed": ["models/shared_adapters/style-1.0.0"], "composition": "community"}
 
 
@@ -302,7 +412,7 @@ def test_install_composition_rolls_back_components_after_later_failure(monkeypat
 
     monkeypatch.setattr(studio_app, "install_from_blossom", install)
     with pytest.raises(studio_app.HTTPException, match="mirror unavailable"):
-        studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, composition_event=composition_event, release_events=events))
+        studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, composition_event=composition_event, release_events=events, license_acknowledged=True))
     assert not first.exists()
 
 
@@ -325,7 +435,7 @@ def test_install_composition_uses_torrent_for_torrent_only_component(monkeypatch
     target = tmp_path / "models" / "shared_adapters" / "style-1.0.0"
     calls = []
     monkeypatch.setattr(studio_app, "install_from_torrent", lambda magnet, _manifest, _root: calls.append(magnet) or target)
-    result = studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, composition_event=composition_event, release_events=[event]))
+    result = studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, composition_event=composition_event, release_events=[event], license_acknowledged=True))
     assert result["installed"] == ["models/shared_adapters/style-1.0.0"]
     assert calls == ["magnet:?xt=urn:btih:abc"]
 
@@ -416,6 +526,7 @@ def test_start_torrent_download_returns_job_id(monkeypatch, tmp_path):
             magnet="magnet:?xt=urn:btih:abc",
             manifest=manifest,
             release_event=event,
+            license_acknowledged=True,
         )
     )
     assert result["job_id"]
@@ -437,9 +548,39 @@ def test_start_torrent_download_rejects_untrusted_release(monkeypatch):
     with pytest.raises(studio_app.HTTPException, match="does not match"):
         studio_app.start_torrent_download(
             studio_app.DownloadTorrentRequest(
-                magnet="magnet:?xt=urn:btih:abc", manifest=requested_manifest, release_event=event
+                magnet="magnet:?xt=urn:btih:abc",
+                manifest=requested_manifest,
+                release_event=event,
+                license_acknowledged=True,
             )
         )
+
+
+def test_torrent_download_does_not_claim_opt_in_seeding(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio_app, "ROOT", tmp_path)
+    monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    job_id = "torrent-job"
+    destination = tmp_path / "models" / "shared_adapters" / ".torrent-download-torrent-job"
+    studio_app._jobs[job_id] = {"status": "queued", "created_at": 0}
+
+    def download(_magnet, target, _manifest, status_callback):
+        status_callback({"progress": 1.0, "peers": 1, "download_rate": 0, "upload_rate": 0, "seeding": False})
+        bundle = target / "bundle"
+        bundle.mkdir(parents=True)
+        return bundle
+
+    monkeypatch.setattr(studio_app, "download_torrent", download)
+    studio_app._run_torrent_download_job(job_id, "magnet:?xt=urn:btih:abc", manifest, destination)
+
+    assert studio_app._jobs[job_id]["status"] == "done"
+    assert studio_app._jobs[job_id]["seeding"] is False
+    assert not destination.exists()
+    assert (tmp_path / "models" / "shared_adapters" / "grounding-1.0.0").is_dir()
+    studio_app._jobs.pop(job_id, None)
 
 
 def test_create_adapter_composition_preserves_lineage_and_weights(tmp_path, monkeypatch):

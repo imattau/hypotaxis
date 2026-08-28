@@ -62,6 +62,8 @@ user-facing Nostr client.
 The frontend uses a checked-in npm lockfile and a local bundle rather than a
 runtime CDN dependency, which keeps the desktop wrapper usable offline after
 the UI assets have been built.
+CI rebuilds the bundle and checks for a clean diff, so changes to
+`studio/static/app.js` cannot silently ship with stale browser output.
 
 Studio's Community Discovery form now queries user-supplied relays and displays
 release metadata after browser-side Nostr signature verification.
@@ -78,6 +80,14 @@ Each declared file is then downloaded to a temporary directory, checked against
 its manifest digest, and atomically moved into the local shared adapter registry
 only after the complete bundle verifies. This prevents a client from replacing
 trusted release metadata with a different manifest at install time.
+
+For production deployments, set `HYPOTAXIS_REQUIRE_NOSTR_SIGNATURES=1`. In this
+strict mode discovery and every remote release or composition installation fail
+closed unless `coincurve` is installed and the Nostr event signatures verify.
+Revocation events are also signature-checked before they can hide an artifact.
+The default remains compatibility-oriented for lightweight local environments;
+those environments report signatures as unavailable rather than claiming they
+are verified.
 
 BitTorrent support is isolated behind the optional `libtorrent` dependency.
 `create_torrent` creates a torrent for a verified bundle, while
@@ -160,6 +170,9 @@ artifact author's pubkey and clients can use `release_is_revoked` to hide
 matching artifacts; Studio exposes reporting for both artifact types. Report
 labels preserve a separate moderation trail without modifying the release
 manifest.
+Generated revocations include both the exact event (`e`) reference and the
+parameterized replaceable-event (`a`) address when available, allowing clients
+to handle either NIP-09 form.
 The report and rating builders only target Hypotaxis release (kind 30078) and
 composition (kind 30079) events, preventing accidental labels on unrelated
 Nostr events.
@@ -177,10 +190,15 @@ an author-controlled NIP-09 action.
 The browser applies the same lowercase 2–64 character report-label validation
 as the Python event builders and requires at least one configured relay before
 publishing a report.
+The browser also honors both NIP-09 event-reference (`e`) and replaceable
+address (`a`) revocations, matching the headless client behavior.
 Before downloading a remote release or composition, Studio asks the user to
 acknowledge the declared license(s). The acknowledgement covers both direct
 Blossom installs and BitTorrent downloads, including Blossom fallback after a
 torrent failure; it does not impose a fixed SPDX allow-list.
+The API also requires an explicit `license_acknowledged: true` field on remote
+install and torrent-download requests, so callers cannot bypass this safeguard
+by skipping the browser UI.
 The packaging form can load the author's verified NIP-10063 Blossom server
 list from the configured Nostr relays and use the resulting servers as mirror
 targets. Only signed events and HTTP(S) server URLs are accepted.

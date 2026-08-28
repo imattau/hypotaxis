@@ -95,6 +95,7 @@ def test_release_revocation_uses_nip09_and_requires_release_author():
     release["sig"] = "2" * 128
     revocation = build_release_revocation_event(release, "1" * 64, 124, reason="bad training data")
     assert revocation["kind"] == NOSTR_DELETION_KIND
+    assert revocation["tags"][2] == ["a", f"{release['kind']}:1{'1' * 63}:{release['tags'][0][1]}"]
     revocation["sig"] = "3" * 128
     assert release_is_revoked(release, [revocation]) is True
     with pytest.raises(ValueError, match="release author"):
@@ -106,8 +107,20 @@ def test_composition_revocation_uses_generic_artifact_builder():
     event = build_composition_event(composition, "1" * 64, 123)
     event["sig"] = "2" * 128
     revocation = build_artifact_revocation_event(event, "1" * 64, 124, reason="withdrawn")
-    assert revocation["tags"] == [["e", event["id"]], ["k", "30079"]]
+    assert revocation["tags"] == [["e", event["id"]], ["k", "30079"], ["a", f"30079:1{'1' * 63}:{event['tags'][0][1]}"]]
     revocation["sig"] = "3" * 128
+    assert release_is_revoked(event, [revocation]) is True
+
+
+def test_composition_revocation_accepts_replaceable_address_tag():
+    composition = build_composition("combined", "1.0.0", "base", [{"name": "style", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}])
+    event = build_composition_event(composition, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    address = f"{event['kind']}:{event['pubkey']}:{event['tags'][0][1]}"
+    revocation = {"pubkey": event["pubkey"], "created_at": 124, "kind": NOSTR_DELETION_KIND, "tags": [["a", address]], "content": "withdrawn"}
+    revocation["id"] = nostr_event_id(revocation)
+    revocation["sig"] = "3" * 128
+
     assert release_is_revoked(event, [revocation]) is True
 
 

@@ -79,6 +79,26 @@ CAPTIONER_ADAPTER_DIR = ROOT / "models" / "captioner" / "adapter"
 CAPTIONER_BASE_MODEL = "google-t5/t5-base"
 MODELS_DIR = ROOT / "models"
 SEED_STATE_PATH = MODELS_DIR / "shared_adapters" / ".seeding.json"
+REQUIRE_NOSTR_SIGNATURES = os.getenv("HYPOTAXIS_REQUIRE_NOSTR_SIGNATURES", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _require_signature_backend() -> None:
+    """Fail closed when production configuration requires Schnorr checks."""
+
+    if REQUIRE_NOSTR_SIGNATURES and not schnorr_available():
+        raise HTTPException(503, "strict signature mode requires the optional 'coincurve' package")
+
+
+def _verify_release_signature(event: dict) -> bool:
+    """Verify a release/composition event according to the deployment policy."""
+
+    if not schnorr_available():
+        if REQUIRE_NOSTR_SIGNATURES:
+            raise ValueError("strict signature mode requires the optional 'coincurve' package")
+        return False
+    if not verify_schnorr_signature(event):
+        raise ValueError("Nostr event signature is invalid")
+    return True
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -238,12 +258,14 @@ class DiscoverAdaptersRequest(BaseModel):
 class InstallAdapterRequest(BaseModel):
     manifest: dict
     release_event: dict
+    license_acknowledged: bool = False
 
 
 class InstallCompositionRequest(BaseModel):
     composition: dict
     composition_event: dict
     release_events: list[dict]
+    license_acknowledged: bool = False
 
 
 class UploadAdapterRequest(BaseModel):
@@ -269,6 +291,7 @@ class DownloadTorrentRequest(BaseModel):
     magnet: str = Field(max_length=4000)
     manifest: dict
     release_event: dict
+    license_acknowledged: bool = False
 
 
 class SeedAdapterRequest(BaseModel):
@@ -436,7 +459,9 @@ def _run_torrent_download_job(job_id: str, magnet: str, manifest: dict, destinat
         if target.exists():
             raise FileExistsError(target)
         bundle.replace(target)
-        job.update({"status": "done", "message": "installed", "progress": 1.0, "bundle_dir": str(target.relative_to(ROOT)), "seeding": True, "finished_at": time.time()})
+        # Downloads do not implicitly opt the user into uploading to peers.
+        # Seeding is reported only after the explicit seed endpoint succeeds.
+        job.update({"status": "done", "message": "installed", "progress": 1.0, "bundle_dir": str(target.relative_to(ROOT)), "seeding": False, "finished_at": time.time()})
     except FileExistsError:
         _finish_job(job, "error", "adapter version is already installed")
     except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
@@ -451,6 +476,8 @@ def start_torrent_download(req: DownloadTorrentRequest):
     """Start a verified magnet download and expose progress through /api/jobs."""
 
     try:
+        if not req.license_acknowledged:
+            raise ValueError("license acknowledgement is required before download")
         _validate_release_for_manifest(req.manifest, req.release_event)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -579,6 +606,7 @@ def discover_adapters(req: DiscoverAdaptersRequest):
     relays = [relay.strip() for relay in req.relays if relay.strip()]
     if not relays:
         raise HTTPException(400, "at least one Nostr relay URL is required")
+    _require_signature_backend()
     try:
         from manga_pipeline.adapter_distribution import NOSTR_RELEASE_KIND
 
@@ -627,9 +655,34 @@ def discover_adapters(req: DiscoverAdaptersRequest):
         if previous is None or event["created_at"] > previous["_created_at"]:
             compositions_by_address[key] = {"event_id": event["id"], "creator_pubkey": event["pubkey"], "signature_verified": signature_verified, "composition": composition, "_created_at": event["created_at"]}
     compositions = [{key: value for key, value in item.items() if key != "_created_at"} for item in compositions_by_address.values()]
-    if compositions:
-        deletion_events = query_nostr_relays(relays, [{"kinds": [5], "#e": [item["event_id"] for item in compositions], "limit": req.limit * 5}], max_events=req.limit * 5)
-        compositions = [item for item in compositions if not release_is_revoked(next(event for event in composition_events if event["id"] == item["event_id"]), deletion_events)]
+    revocable = releases + compositions
+    if revocable:
+        event_ids = [item["event_id"] for item in revocable]
+        addresses = []
+        for event in [*events, *composition_events]:
+            d_tag = next((tag[1] for tag in event.get("tags", []) if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "d"), None)
+            if d_tag is not None:
+                addresses.append(f"{event['kind']}:{event['pubkey']}:{d_tag}")
+        deletion_events = []
+        deletion_filters = [
+            {"kinds": [5], "#e": event_ids, "limit": req.limit * 10},
+            {"kinds": [5], "#a": sorted(set(addresses)), "limit": req.limit * 10},
+        ]
+        for deletion_filter in deletion_filters:
+            deletion_events.extend(query_nostr_relays(relays, [deletion_filter], max_events=req.limit * 10))
+        deletion_events = list({event["id"]: event for event in deletion_events}.values())
+        if can_verify_signatures:
+            deletion_events = [event for event in deletion_events if verify_schnorr_signature(event)]
+        release_events_by_id = {event["id"]: event for event in events}
+        composition_events_by_id = {event["id"]: event for event in composition_events}
+        releases = [
+            item for item in releases
+            if not release_is_revoked(release_events_by_id[item["event_id"]], deletion_events)
+        ]
+        compositions = [
+            item for item in compositions
+            if not release_is_revoked(composition_events_by_id[item["event_id"]], deletion_events)
+        ]
     return {
         "releases": releases,
         "compositions": compositions,
@@ -643,8 +696,7 @@ def _validate_release_for_manifest(manifest: dict, release_event: dict) -> None:
     signed_manifest = parse_release_event(release_event)
     if signed_manifest != manifest:
         raise ValueError("release event manifest does not match install manifest")
-    if schnorr_available() and not verify_schnorr_signature(release_event):
-        raise ValueError("release event signature is invalid")
+    _verify_release_signature(release_event)
 
 
 @app.post("/api/adapters/install")
@@ -652,6 +704,8 @@ def install_adapter(req: InstallAdapterRequest):
     """Install a discovered adapter after verified Blossom downloads."""
 
     try:
+        if not req.license_acknowledged:
+            raise ValueError("license acknowledgement is required before installation")
         _validate_release_for_manifest(req.manifest, req.release_event)
         target = install_from_blossom(req.manifest, MODELS_DIR / "shared_adapters")
     except FileExistsError:
@@ -667,14 +721,15 @@ def install_composition(req: InstallCompositionRequest):
 
     installed_targets = []
     try:
+        if not req.license_acknowledged:
+            raise ValueError("license acknowledgement is required before installation")
         from manga_pipeline.adapter_distribution import validate_composition
 
         validate_composition(req.composition)
         signed_composition = parse_composition_event(req.composition_event)
         if signed_composition != req.composition:
             raise ValueError("composition event does not match install composition")
-        if schnorr_available() and not verify_schnorr_signature(req.composition_event):
-            raise ValueError("composition event signature is invalid")
+        _verify_release_signature(req.composition_event)
         events_by_component = {}
         for event in req.release_events:
             manifest = parse_release_event(event)

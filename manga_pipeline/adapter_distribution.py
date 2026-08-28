@@ -302,6 +302,9 @@ def build_artifact_revocation_event(
         "tags": [["e", artifact_event["id"]], ["k", str(artifact_event["kind"])]],
         "content": reason,
     }
+    d_tag = next((tag[1] for tag in artifact_event.get("tags", []) if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "d"), None)
+    if d_tag is not None:
+        event["tags"].append(["a", f"{artifact_event['kind']}:{pubkey}:{d_tag}"])
     event["id"] = nostr_event_id(event)
     return event
 
@@ -319,7 +322,7 @@ def release_is_revoked(release_event: dict[str, Any], deletion_events: Iterable[
             continue
         if any(isinstance(tag, list) and len(tag) >= 2 and tag[0] == "e" and tag[1] == release_event["id"] for tag in deletion["tags"]):
             return True
-        address = f"{NOSTR_RELEASE_KIND}:{release_event['pubkey']}:adapter:"
+        address = f"{release_event['kind']}:{release_event['pubkey']}:"
         if any(isinstance(tag, list) and len(tag) >= 2 and isinstance(tag[1], str) and tag[0] == "a" and tag[1].startswith(address) for tag in deletion["tags"]):
             return True
     return False
