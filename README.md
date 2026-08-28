@@ -33,6 +33,7 @@ pip install -r requirements-story-adapt.txt  # Stage A (embeddings, NER, LLM bri
 python -m spacy download en_core_web_sm      # Stage A's NER model
 pip install -r requirements-generation.txt   # Stage C real generation (diffusers/torch)
 pip install -r requirements-studio.txt       # web studio UI
+pip install -r requirements-distribution.txt # optional Nostr/Blossom/BitTorrent server features
 pip install -r requirements-training.txt     # Phase 3 LoRA captioner training (optional)
 pip install -r requirements-dev.txt          # pytest, for running tests/
 ```

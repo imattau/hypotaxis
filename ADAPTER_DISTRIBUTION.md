@@ -85,6 +85,9 @@ BitTorrent support is isolated behind the optional `libtorrent` dependency.
 resulting bundle before returning. The rest of Hypotaxis remains usable when
 `libtorrent` is not installed; callers receive `TorrentUnavailableError` and
 can fall back to Blossom mirrors.
+For optional server-side relay queries, Schnorr verification, and BitTorrent,
+install `requirements-distribution.txt`; the default Studio requirements stay
+lightweight and do not pull these packages in.
 `TorrentSeeder` is an explicit opt-in long-lived session for keeping a
 completed bundle available to peers; downloading alone does not start seeding.
 Studio persists only explicit seeding choices in

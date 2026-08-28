@@ -1,0 +1,6 @@
+# Optional server-side distribution features. The Studio UI itself uses the
+# bundled nostr-tools dependency and does not require these packages.
+-r requirements-studio.txt
+websocket-client
+coincurve
+libtorrent
