@@ -52,6 +52,11 @@ origins; Studio exposes it at `POST /api/adapters/blossom/health` for UI and
 future source-selection logic.
 The headless `POST /api/adapters/discover` response now includes verified,
 newest-per-creator composition events alongside adapter releases.
+It also returns latest-per-author rating aggregates and deduplicated report
+summaries for active releases and compositions, keeping headless clients in
+step with the Studio browser.
+All discovery subqueries, including revocation and moderation lookups, map
+relay transport failures to an explicit HTTP 502 response.
 
 The Studio browser now uses bundled `nostr-tools` for discovery. Its
 `SimplePool` queries multiple relays and `verifyEvent` validates NIP-01 event

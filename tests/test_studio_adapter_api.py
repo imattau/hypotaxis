@@ -125,6 +125,73 @@ def test_discover_adapters_returns_valid_release_metadata(monkeypatch):
     assert result["releases"][0]["signature_verified"] is False
 
 
+def test_discover_adapters_aggregates_latest_verified_labels(monkeypatch):
+    from manga_pipeline.adapter_distribution import build_release_event, nostr_event_id
+
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    release = build_release_event(manifest, "1" * 64, 123)
+    release["sig"] = "2" * 128
+
+    def label(pubkey, created_at, value):
+        event = {"pubkey": pubkey, "created_at": created_at, "kind": 1985, "tags": [["l", value, "hypotaxis.adapter.rating"], ["e", release["id"]], ["k", "30078"]], "content": ""}
+        event["id"] = nostr_event_id(event)
+        event["sig"] = "3" * 128
+        return event
+
+    labels = [label("2" * 64, 124, "2/5"), label("2" * 64, 125, "5/5"), label("4" * 64, 124, "3/5")]
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    monkeypatch.setattr(
+        studio_app,
+        "query_nostr_relays",
+        lambda _relays, filters, max_events: [release] if filters[0]["kinds"] == [30078] else labels if filters[0]["kinds"] == [1985] else [],
+    )
+
+    result = studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+
+    assert result["releases"][0]["rating_average"] == 4.0
+    assert result["releases"][0]["rating_count"] == 2
+    assert result["releases"][0]["report_count"] == 0
+
+
+def test_discover_adapters_deduplicates_reports_and_ignores_forged_labels(monkeypatch):
+    from manga_pipeline.adapter_distribution import build_release_event, nostr_event_id
+
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    release = build_release_event(manifest, "1" * 64, 123)
+    release["sig"] = "2" * 128
+
+    def report(pubkey, created_at, reason, sig="3" * 128):
+        event = {"pubkey": pubkey, "created_at": created_at, "kind": 1985, "tags": [["l", reason, "hypotaxis.adapter.report"], ["e", release["id"]], ["k", "30078"]], "content": ""}
+        event["id"] = nostr_event_id(event)
+        event["sig"] = sig
+        return event
+
+    labels = [
+        report("2" * 64, 124, "malware"),
+        report("2" * 64, 125, "malware"),
+        report("4" * 64, 124, "license.mismatch"),
+        report("5" * 64, 124, "INVALID REPORT"),
+    ]
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: True)
+    monkeypatch.setattr(studio_app, "verify_schnorr_signature", lambda event: event["pubkey"] != "4" * 64)
+    monkeypatch.setattr(
+        studio_app,
+        "query_nostr_relays",
+        lambda _relays, filters, max_events: [release] if filters[0]["kinds"] == [30078] else labels if filters[0]["kinds"] == [1985] else [],
+    )
+
+    result = studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+
+    assert result["releases"][0]["report_count"] == 1
+    assert result["releases"][0]["report_reasons"] == [["malware", 1]]
+
+
 def test_discover_adapters_strict_signature_mode_requires_coincurve(monkeypatch):
     monkeypatch.setattr(studio_app, "REQUIRE_NOSTR_SIGNATURES", True)
     monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
@@ -135,6 +202,30 @@ def test_discover_adapters_strict_signature_mode_requires_coincurve(monkeypatch)
 def test_discover_adapters_requires_relay(monkeypatch):
     with pytest.raises(studio_app.HTTPException, match="relay URL"):
         studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=[]))
+
+
+def test_discover_adapters_returns_bad_gateway_for_subquery_failure(monkeypatch):
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    from manga_pipeline.adapter_distribution import build_release_event
+
+    release = build_release_event(manifest, "1" * 64, 123)
+    release["sig"] = "2" * 128
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+
+    def query(_relays, filters, max_events):
+        if filters[0]["kinds"] == [30078]:
+            return [release]
+        if filters[0]["kinds"] == [30079]:
+            return []
+        raise OSError("relay unavailable")
+
+    monkeypatch.setattr(studio_app, "query_nostr_relays", query)
+    with pytest.raises(studio_app.HTTPException) as error:
+        studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+    assert error.value.status_code == 502
 
 
 def test_discover_adapters_returns_newest_parameterized_release(monkeypatch):

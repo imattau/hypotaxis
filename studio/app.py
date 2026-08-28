@@ -36,6 +36,7 @@ from manga_pipeline.adapter_distribution import (  # noqa: E402
     parse_release_event,
     parse_composition_event,
     release_is_revoked,
+    NOSTR_LABEL_KIND,
     query_nostr_relays,
     schnorr_available,
     verify_schnorr_signature,
@@ -99,6 +100,52 @@ def _verify_release_signature(event: dict) -> bool:
     if not verify_schnorr_signature(event):
         raise ValueError("Nostr event signature is invalid")
     return True
+
+
+def _attach_label_summaries(items: list[dict], label_events: list[dict]) -> None:
+    """Attach verified rating/report summaries to discovered artifacts."""
+
+    ratings: dict[tuple[str, str], tuple[int, int]] = {}
+    reports: dict[tuple[str, str, str], int] = {}
+    for event in label_events:
+        target = next((tag[1] for tag in event.get("tags", []) if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "e"), None)
+        kind_tag = next((tag[1] for tag in event.get("tags", []) if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "k"), None)
+        label = next((tag for tag in event.get("tags", []) if isinstance(tag, list) and len(tag) >= 3 and tag[0] == "l" and tag[2] == "hypotaxis.adapter.rating"), None)
+        report = next((tag for tag in event.get("tags", []) if isinstance(tag, list) and len(tag) >= 3 and tag[0] == "l" and tag[2] == "hypotaxis.adapter.report"), None)
+        if not target or kind_tag not in {str(item.get("event", {}).get("kind")) for item in items}:
+            continue
+        if label is not None:
+            try:
+                value = int(str(label[1]).split("/", 1)[0])
+            except (ValueError, IndexError):
+                value = 0
+            if 1 <= value <= 5:
+                key = (target, event["pubkey"])
+                if key not in ratings or event["created_at"] > ratings[key][1]:
+                    ratings[key] = (value, event["created_at"])
+        if report is not None and isinstance(report[1], str) and re.fullmatch(r"[a-z0-9][a-z0-9._:-]{1,63}", report[1]):
+            key = (target, event["pubkey"], report[1])
+            if key not in reports or event["created_at"] > reports[key]:
+                reports[key] = event["created_at"]
+    for item in items:
+        target = item["event_id"]
+        values = [value for (event_id, _author), (value, _created_at) in ratings.items() if event_id == target]
+        reasons = sorted(reason for (event_id, _author, reason) in reports if event_id == target)
+        item.update({
+            "rating_average": sum(values) / len(values) if values else None,
+            "rating_count": len(values),
+            "report_count": len(reasons),
+            "report_reasons": [[reason, sum(1 for event_id, _author, candidate in reports if event_id == target and candidate == reason)] for reason in sorted(set(reasons))],
+        })
+
+
+def _query_discovery_events(relays: list[str], filters: list[dict], *, max_events: int) -> list[dict]:
+    """Query discovery relays with a stable API-level failure response."""
+
+    try:
+        return query_nostr_relays(relays, filters, max_events=max_events)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
 
 @asynccontextmanager
 async def lifespan(_app):
@@ -607,13 +654,10 @@ def discover_adapters(req: DiscoverAdaptersRequest):
     if not relays:
         raise HTTPException(400, "at least one Nostr relay URL is required")
     _require_signature_backend()
-    try:
-        from manga_pipeline.adapter_distribution import NOSTR_RELEASE_KIND
+    from manga_pipeline.adapter_distribution import NOSTR_RELEASE_KIND
 
-        events = query_nostr_relays(relays, [{"kinds": [NOSTR_RELEASE_KIND], "limit": req.limit}], max_events=req.limit)
-        composition_events = query_nostr_relays(relays, [{"kinds": [30079], "limit": req.limit}], max_events=req.limit)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise HTTPException(502, str(exc)) from exc
+    events = _query_discovery_events(relays, [{"kinds": [NOSTR_RELEASE_KIND], "limit": req.limit}], max_events=req.limit)
+    composition_events = _query_discovery_events(relays, [{"kinds": [30079], "limit": req.limit}], max_events=req.limit)
     releases_by_address = {}
     can_verify_signatures = schnorr_available()
     for event in events:
@@ -669,7 +713,7 @@ def discover_adapters(req: DiscoverAdaptersRequest):
             {"kinds": [5], "#a": sorted(set(addresses)), "limit": req.limit * 10},
         ]
         for deletion_filter in deletion_filters:
-            deletion_events.extend(query_nostr_relays(relays, [deletion_filter], max_events=req.limit * 10))
+            deletion_events.extend(_query_discovery_events(relays, [deletion_filter], max_events=req.limit * 10))
         deletion_events = list({event["id"]: event for event in deletion_events}.values())
         if can_verify_signatures:
             deletion_events = [event for event in deletion_events if verify_schnorr_signature(event)]
@@ -683,6 +727,16 @@ def discover_adapters(req: DiscoverAdaptersRequest):
             item for item in compositions
             if not release_is_revoked(composition_events_by_id[item["event_id"]], deletion_events)
         ]
+    active_items = releases + compositions
+    if active_items:
+        label_events = _query_discovery_events(
+            relays,
+            [{"kinds": [NOSTR_LABEL_KIND], "#e": [item["event_id"] for item in active_items], "limit": req.limit * 10}],
+            max_events=req.limit * 10,
+        )
+        if can_verify_signatures:
+            label_events = [event for event in label_events if verify_schnorr_signature(event)]
+        _attach_label_summaries(active_items, label_events)
     return {
         "releases": releases,
         "compositions": compositions,
