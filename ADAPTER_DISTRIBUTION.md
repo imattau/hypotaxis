@@ -50,6 +50,8 @@ alongside per-server failures so a temporary mirror outage is recoverable.
 `check_blossom_servers` provides a lightweight HEAD probe for configured mirror
 origins; Studio exposes it at `POST /api/adapters/blossom/health` for UI and
 future source-selection logic.
+The headless `POST /api/adapters/discover` response now includes verified,
+newest-per-creator composition events alongside adapter releases.
 
 The Studio browser now uses bundled `nostr-tools` for discovery. Its
 `SimplePool` queries multiple relays and `verifyEvent` validates NIP-01 event
@@ -90,6 +92,8 @@ Studio persists only explicit seeding choices in
 the application lifespan closes active sessions cleanly on shutdown.
 Studio exposes Start/Stop Seeding controls for verified local bundles and
 reports the active seeder's peer and upload-rate state.
+Removing a local bundle also stops its matching seeder before deleting the
+bundle and adjacent torrent metadata.
 Torrent downloads initiated by Studio also require the signed release event and
 use the same manifest/event and Schnorr checks as Blossom installation before a
 job is launched.
@@ -135,8 +139,9 @@ digests, weights, lineage, and evaluation evidence, so other clients can audit
 the merge before reconstructing it locally.
 Community Discovery also shows verified remote compositions and offers
 component installation when every referenced adapter release is present with a
-Blossom source. The server verifies all signed release events and lineage
-digests before downloading any component.
+Blossom source or torrent magnet. The server verifies all signed release events
+and lineage digests before downloading any component, preferring Blossom and
+falling back to BitTorrent for torrent-only components.
 
 Adapter manifests may also include a `training` object with reproducibility
 fields such as `method`, `rank`, `dataset`, `dataset_sha256`, and `examples`.

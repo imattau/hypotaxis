@@ -1151,6 +1151,32 @@ def download_torrent(
     return bundle_root
 
 
+def install_from_torrent(
+    magnet: str,
+    manifest: dict[str, Any],
+    install_root: str | Path,
+    *,
+    status_callback=None,
+    timeout: int = 3600,
+) -> Path:
+    """Download, verify, and atomically install one adapter from a magnet."""
+
+    validate_manifest(manifest)
+    install_root = Path(install_root).resolve()
+    install_root.mkdir(parents=True, exist_ok=True)
+    target = install_root / f"{manifest['name']}-{manifest['version']}"
+    if target.exists():
+        raise FileExistsError(target)
+    temporary = Path(tempfile.mkdtemp(dir=install_root, prefix=".torrent-install-"))
+    try:
+        bundle = download_torrent(magnet, temporary, manifest, status_callback=status_callback, timeout=timeout)
+        bundle.replace(target)
+        return target
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+
+
 def _torrent_status(status: Any, *, seeding: bool) -> dict[str, Any]:
     """Normalize a libtorrent status object for UI/API consumers."""
 

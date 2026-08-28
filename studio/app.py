@@ -30,9 +30,12 @@ from manga_pipeline.adapter_distribution import (  # noqa: E402
     create_torrent,
     download_torrent,
     install_from_blossom,
+    install_from_torrent,
     manifest_digest,
     mirror_blob,
     parse_release_event,
+    parse_composition_event,
+    release_is_revoked,
     query_nostr_relays,
     schnorr_available,
     verify_schnorr_signature,
@@ -238,6 +241,7 @@ class InstallAdapterRequest(BaseModel):
 
 class InstallCompositionRequest(BaseModel):
     composition: dict
+    composition_event: dict
     release_events: list[dict]
 
 
@@ -578,6 +582,7 @@ def discover_adapters(req: DiscoverAdaptersRequest):
         from manga_pipeline.adapter_distribution import NOSTR_RELEASE_KIND
 
         events = query_nostr_relays(relays, [{"kinds": [NOSTR_RELEASE_KIND], "limit": req.limit}], max_events=req.limit)
+        composition_events = query_nostr_relays(relays, [{"kinds": [30079], "limit": req.limit}], max_events=req.limit)
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(502, str(exc)) from exc
     releases_by_address = {}
@@ -604,8 +609,24 @@ def discover_adapters(req: DiscoverAdaptersRequest):
         if previous is None or event["created_at"] > previous["_created_at"]:
             releases_by_address[key] = {**release, "event": event, "_created_at": event["created_at"]}
     releases = [{key: value for key, value in release.items() if key != "_created_at"} for release in releases_by_address.values()]
+    compositions_by_address = {}
+    for event in composition_events:
+        try:
+            composition = parse_composition_event(event)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        address = next((tag[1] for tag in event.get("tags", []) if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "d"), f"composition:{composition['name']}")
+        key = f"{event['pubkey']}:{address}"
+        previous = compositions_by_address.get(key)
+        if previous is None or event["created_at"] > previous["_created_at"]:
+            compositions_by_address[key] = {"event_id": event["id"], "creator_pubkey": event["pubkey"], "signature_verified": can_verify_signatures and verify_schnorr_signature(event), "composition": composition, "_created_at": event["created_at"]}
+    compositions = [{key: value for key, value in item.items() if key != "_created_at"} for item in compositions_by_address.values()]
+    if compositions:
+        deletion_events = query_nostr_relays(relays, [{"kinds": [5], "#e": [item["event_id"] for item in compositions], "limit": req.limit * 5}], max_events=req.limit * 5)
+        compositions = [item for item in compositions if not release_is_revoked(next(event for event in composition_events if event["id"] == item["event_id"]), deletion_events)]
     return {
         "releases": releases,
+        "compositions": compositions,
         "signature_verification": "verified" if can_verify_signatures else "not available",
     }
 
@@ -643,6 +664,11 @@ def install_composition(req: InstallCompositionRequest):
         from manga_pipeline.adapter_distribution import validate_composition
 
         validate_composition(req.composition)
+        signed_composition = parse_composition_event(req.composition_event)
+        if signed_composition != req.composition:
+            raise ValueError("composition event does not match install composition")
+        if schnorr_available() and not verify_schnorr_signature(req.composition_event):
+            raise ValueError("composition event signature is invalid")
         events_by_component = {}
         for event in req.release_events:
             manifest = parse_release_event(event)
@@ -661,7 +687,13 @@ def install_composition(req: InstallCompositionRequest):
             raise ValueError("composition components target incompatible base models")
         installed = []
         for manifest in manifests:
-            target = install_from_blossom(manifest, MODELS_DIR / "shared_adapters")
+            if manifest.get("distribution", {}).get("blossom"):
+                target = install_from_blossom(manifest, MODELS_DIR / "shared_adapters")
+            else:
+                magnet = manifest.get("distribution", {}).get("torrent", {}).get("magnet")
+                if not magnet:
+                    raise ValueError(f"component {manifest['name']} has no Blossom source or torrent magnet")
+                target = install_from_torrent(magnet, manifest, MODELS_DIR / "shared_adapters")
             installed_targets.append(target)
             installed.append(str(target.relative_to(ROOT)))
     except FileExistsError:
@@ -712,6 +744,11 @@ def remove_local_adapter(name: str, version: str):
 
     bundle = _adapter_bundle(name, version)
     try:
+        if _torrent_seeder is not None:
+            try:
+                _torrent_seeder.stop(f"{name}-{version}")
+            except KeyError:
+                pass
         shutil.rmtree(bundle)
         torrent = bundle.parent / f"{bundle.name}.torrent"
         torrent.unlink(missing_ok=True)

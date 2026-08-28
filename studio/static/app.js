@@ -506,12 +506,21 @@ async function discoverAdapters(event) {
       }
     }
     if (compositions.size) {
+      const compositionDeletionEvents = (await nostrPool.querySync(relays, { kinds: [5], "#e": [...compositions.values()].map((item) => item.event.id), limit: 100 })).filter((deletion) => verifyEvent(deletion));
+      for (const [key, item] of compositions) {
+        if (compositionDeletionEvents.some((deletion) => deletion.pubkey === item.event.pubkey && deletion.tags.some((tag) => tag[0] === "e" && tag[1] === item.event.id))) compositions.delete(key);
+      }
+    }
+    if (compositions.size) {
       results.appendChild(el("<div class='section-title'>Community Compositions</div>"));
       for (const { event, composition } of compositions.values()) {
         const componentReleases = composition.components.map((component) => releasesByComponent.get(`${component.name}@${component.version}`));
-        const installable = componentReleases.length === composition.components.length && componentReleases.every((release) => Array.isArray(release?.manifest.distribution?.blossom) && release.manifest.distribution.blossom.length);
+        const installable = componentReleases.length === composition.components.length && componentReleases.every((release) => {
+          const distribution = release?.manifest.distribution || {};
+          return (Array.isArray(distribution.blossom) && distribution.blossom.length) || distribution.torrent?.magnet;
+        });
         const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.components.length} component(s)</div><div class="meta">${composition.community_merge ? "Community merge" : "Composition"} · ${Array.isArray(composition.evaluations) ? composition.evaluations.length : 0} evaluation record(s)</div><div class="meta">Creator: ${escapeHtml(event.pubkey.slice(0, 16))}... · Event: ${escapeHtml(event.id.slice(0, 16))}...</div>${installable ? `<button class="btn secondary install-composition" type="button">Install Components</button>` : ""}<div class="status-line composition-install-status"></div></div>`);
-        if (installable) card.querySelector(".install-composition").addEventListener("click", () => installRemoteComposition(composition, componentReleases, card));
+        if (installable) card.querySelector(".install-composition").addEventListener("click", () => installRemoteComposition(composition, event, componentReleases, card));
         results.appendChild(card);
       }
     }
@@ -523,7 +532,7 @@ async function discoverAdapters(event) {
   }
 }
 
-async function installRemoteComposition(composition, releases, card) {
+async function installRemoteComposition(composition, compositionEvent, releases, card) {
   const button = card.querySelector(".install-composition");
   const status = card.querySelector(".composition-install-status");
   button.disabled = true;
@@ -533,7 +542,7 @@ async function installRemoteComposition(composition, releases, card) {
     const result = await api("/api/adapters/composition/install", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ composition, release_events: releases.map((release) => release.event) }),
+      body: JSON.stringify({ composition, composition_event: compositionEvent, release_events: releases.map((release) => release.event) }),
     });
     status.textContent = `Installed ${result.installed.length} component(s).`;
     button.remove();

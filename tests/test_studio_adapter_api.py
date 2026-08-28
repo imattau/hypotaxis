@@ -81,10 +81,13 @@ def test_remove_local_adapter_deletes_bundle_and_torrent(tmp_path, monkeypatch):
     (bundle / "manifest.json").write_text("{}", encoding="utf-8")
     torrent = bundle.parent / "grounding-1.0.0.torrent"
     torrent.write_bytes(b"torrent")
+    stopped = []
+    monkeypatch.setattr(studio_app, "_torrent_seeder", type("Seeder", (), {"stop": lambda _self, seed_id: stopped.append(seed_id)})())
     result = studio_app.remove_local_adapter("grounding", "1.0.0")
     assert result == {"removed": True, "name": "grounding", "version": "1.0.0"}
     assert not bundle.exists()
     assert not torrent.exists()
+    assert stopped == ["grounding-1.0.0"]
 
 
 def test_create_adapter_torrent_endpoint_reports_created(tmp_path, monkeypatch):
@@ -146,6 +149,34 @@ def test_discover_adapters_returns_newest_parameterized_release(monkeypatch):
     assert result["releases"][0]["manifest"]["version"] == "1.1.0"
 
 
+def test_discover_adapters_returns_verified_compositions(monkeypatch):
+    from manga_pipeline.adapter_distribution import build_composition, build_composition_event
+
+    composition = build_composition("community", "1.0.0", "base", [{"name": "style", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}], evaluations=[{"name": "heldout", "dataset": "corpus-v1", "score": 0.8}])
+    event = build_composition_event(composition, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    monkeypatch.setattr(studio_app, "query_nostr_relays", lambda _relays, filters, max_events: [event] if filters[0]["kinds"] == [30079] else [])
+    result = studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+    assert result["releases"] == []
+    assert result["compositions"][0]["composition"]["name"] == "community"
+
+
+def test_discover_adapters_hides_revoked_compositions(monkeypatch):
+    from manga_pipeline.adapter_distribution import build_composition, build_composition_event, nostr_event_id
+
+    composition = build_composition("community", "1.0.0", "base", [{"name": "style", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}], evaluations=[{"name": "heldout", "dataset": "corpus-v1", "score": 0.8}])
+    event = build_composition_event(composition, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    deletion = {"pubkey": "1" * 64, "created_at": 124, "kind": 5, "tags": [["e", event["id"]]], "content": "withdrawn"}
+    deletion["id"] = nostr_event_id(deletion)
+    deletion["sig"] = "2" * 128
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    monkeypatch.setattr(studio_app, "query_nostr_relays", lambda _relays, filters, max_events: [event] if filters[0]["kinds"] == [30079] else [deletion] if filters[0]["kinds"] == [5] else [])
+    result = studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+    assert result["compositions"] == []
+
+
 def test_install_adapter_endpoint_returns_installed_bundle(monkeypatch, tmp_path):
     monkeypatch.setattr(studio_app, "ROOT", tmp_path)
     monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
@@ -202,8 +233,9 @@ def test_install_composition_installs_verified_components(monkeypatch, tmp_path)
     manifest = {
         "schema": "hypotaxis.adapter.v1", "name": "style", "version": "1.0.0", "base_model": "base", "license": "MIT",
         "files": [{"path": "x.bin", "sha256": "a" * 64}],
+        "distribution": {"blossom": ["https://blossom.example/blob"]},
     }
-    from manga_pipeline.adapter_distribution import build_composition, build_release_event, manifest_digest
+    from manga_pipeline.adapter_distribution import build_composition, build_composition_event, build_release_event, manifest_digest
 
     event = build_release_event(manifest, "1" * 64, 123)
     event["sig"] = "2" * 128
@@ -211,9 +243,11 @@ def test_install_composition_installs_verified_components(monkeypatch, tmp_path)
         "community", "1.0.0", "base",
         [{"name": "style", "version": "1.0.0", "manifest_sha256": manifest_digest(manifest), "weight": 1.0}],
     )
+    composition_event = build_composition_event(composition, "1" * 64, 123)
+    composition_event["sig"] = "2" * 128
     installed = tmp_path / "models" / "shared_adapters" / "style-1.0.0"
     monkeypatch.setattr(studio_app, "install_from_blossom", lambda _manifest, _root: installed)
-    result = studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, release_events=[event]))
+    result = studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, composition_event=composition_event, release_events=[event]))
     assert result == {"installed": ["models/shared_adapters/style-1.0.0"], "composition": "community"}
 
 
@@ -221,7 +255,7 @@ def test_install_composition_rolls_back_components_after_later_failure(monkeypat
     monkeypatch.setattr(studio_app, "ROOT", tmp_path)
     monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
     monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
-    from manga_pipeline.adapter_distribution import build_composition, build_release_event, manifest_digest
+    from manga_pipeline.adapter_distribution import build_composition, build_composition_event, build_release_event, manifest_digest
 
     manifests = []
     events = []
@@ -229,6 +263,7 @@ def test_install_composition_rolls_back_components_after_later_failure(monkeypat
         manifest = {
             "schema": "hypotaxis.adapter.v1", "name": name, "version": "1.0.0", "base_model": "base", "license": "MIT",
             "files": [{"path": "x.bin", "sha256": "a" * 64}],
+            "distribution": {"blossom": ["https://blossom.example/blob"]},
         }
         manifests.append(manifest)
         event = build_release_event(manifest, "1" * 64, 123)
@@ -237,6 +272,8 @@ def test_install_composition_rolls_back_components_after_later_failure(monkeypat
     composition = build_composition("community", "1.0.0", "base", [
         {"name": m["name"], "version": m["version"], "manifest_sha256": manifest_digest(m), "weight": 1.0} for m in manifests
     ])
+    composition_event = build_composition_event(composition, "1" * 64, 123)
+    composition_event["sig"] = "2" * 128
     first = tmp_path / "models" / "shared_adapters" / "style-1.0.0"
     calls = 0
 
@@ -250,8 +287,32 @@ def test_install_composition_rolls_back_components_after_later_failure(monkeypat
 
     monkeypatch.setattr(studio_app, "install_from_blossom", install)
     with pytest.raises(studio_app.HTTPException, match="mirror unavailable"):
-        studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, release_events=events))
+        studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, composition_event=composition_event, release_events=events))
     assert not first.exists()
+
+
+def test_install_composition_uses_torrent_for_torrent_only_component(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio_app, "ROOT", tmp_path)
+    monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    from manga_pipeline.adapter_distribution import build_composition, build_composition_event, build_release_event, manifest_digest
+
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "style", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+        "distribution": {"torrent": {"magnet": "magnet:?xt=urn:btih:abc"}},
+    }
+    event = build_release_event(manifest, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    composition = build_composition("community", "1.0.0", "base", [{"name": "style", "version": "1.0.0", "manifest_sha256": manifest_digest(manifest), "weight": 1.0}])
+    composition_event = build_composition_event(composition, "1" * 64, 123)
+    composition_event["sig"] = "2" * 128
+    target = tmp_path / "models" / "shared_adapters" / "style-1.0.0"
+    calls = []
+    monkeypatch.setattr(studio_app, "install_from_torrent", lambda magnet, _manifest, _root: calls.append(magnet) or target)
+    result = studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, composition_event=composition_event, release_events=[event]))
+    assert result["installed"] == ["models/shared_adapters/style-1.0.0"]
+    assert calls == ["magnet:?xt=urn:btih:abc"]
 
 
 def test_upload_adapter_endpoint_verifies_bundle_and_uploads_each_file(tmp_path, monkeypatch):
