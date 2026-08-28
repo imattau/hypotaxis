@@ -130,6 +130,8 @@ function showAdapters() {
   main.appendChild(discovery);
   const registry = el(`<div id="local-adapter-registry"><div class="section-title">Local Adapter Registry</div><p class="empty-state">Loading local bundles...</p></div>`);
   main.appendChild(registry);
+  const compositions = el(`<div id="adapter-compositions"><div class="section-title">Adapter Compositions</div><p class="empty-state">Loading compositions...</p></div>`);
+  main.appendChild(compositions);
   const form = el(`
     <form class="card" id="adapter-package-form">
       <label>Source directory</label>
@@ -187,7 +189,79 @@ function showAdapters() {
     }
   });
   main.appendChild(form);
+  const compositionForm = el(`
+    <form class="card" id="adapter-composition-form">
+      <div class="section-title">Compose Adapter Bank</div>
+      <div class="status-line">Combine compatible local adapters at runtime. Enter one <code>name@version=weight</code> per line.</div>
+      <label>Composition name</label>
+      <input type="text" id="composition-name" value="community-bank" required />
+      <label>Version</label>
+      <input type="text" id="composition-version" value="1.0.0" required />
+      <label>Base model</label>
+      <input type="text" id="composition-base" required />
+      <label>Components</label>
+      <textarea id="composition-components" class="compact-textarea" placeholder="grounding@1.0.0=0.7&#10;style@1.0.0=1.0" required></textarea>
+      <button class="btn secondary" type="submit">Create Composition</button>
+      <div class="status-line" id="composition-status"></div>
+    </form>
+  `);
+  compositionForm.addEventListener("submit", createComposition);
+  main.appendChild(compositionForm);
   loadLocalAdapters(registry);
+  loadCompositions(compositions);
+}
+
+async function createComposition(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button");
+  const status = form.querySelector("#composition-status");
+  const components = form.querySelector("#composition-components").value.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+    const [adapter, rawWeight = "1"] = line.split("=");
+    const at = adapter.lastIndexOf("@");
+    if (at < 1) throw new Error(`Invalid component: ${line}`);
+    return { name: adapter.slice(0, at), version: adapter.slice(at + 1), weight: Number(rawWeight) };
+  });
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Validating compatibility and writing composition...";
+  try {
+    const result = await api("/api/adapters/composition", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: form.querySelector("#composition-name").value.trim(),
+        version: form.querySelector("#composition-version").value.trim(),
+        base_model: form.querySelector("#composition-base").value.trim(),
+        components,
+      }),
+    });
+    status.textContent = `Created ${result.path}`;
+    loadCompositions(document.getElementById("adapter-compositions"));
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function loadCompositions(holder) {
+  try {
+    const { compositions } = await api("/api/adapters/compositions");
+    holder.innerHTML = `<div class="section-title">Adapter Compositions</div>`;
+    if (!compositions.length) {
+      holder.appendChild(el(`<p class="empty-state">No compositions yet.</p>`));
+      return;
+    }
+    const grid = el(`<div class="grid"></div>`);
+    for (const composition of compositions) {
+      grid.appendChild(el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.component_count} component(s)</div><div class="meta">${escapeHtml(composition.path)}</div></div>`));
+    }
+    holder.appendChild(grid);
+  } catch (e) {
+    holder.innerHTML = `<div class="section-title">Adapter Compositions</div><p class="status-line error">Could not load compositions: ${escapeHtml(e.message)}</p>`;
+  }
 }
 
 async function discoverAdapters(event) {

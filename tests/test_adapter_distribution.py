@@ -29,6 +29,7 @@ from manga_pipeline.adapter_distribution import (
     nostr_event_id,
     parse_release_event,
     query_nostr_relays,
+    resolve_composition_paths,
     schnorr_available,
     verify_schnorr_signature,
     validate_composition,
@@ -453,6 +454,40 @@ def test_compatible_manifests_requires_one_base_model():
     with pytest.raises(ValueError, match="incompatible"):
         compatible_manifests([first, second])
     assert compatible_manifests([first]) == "Qwen/Qwen2.5-7B-Instruct"
+
+
+def test_resolve_composition_paths_verifies_lineage_and_returns_weights(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    adapter_root = tmp_path / "adapters"
+    manifests = []
+    for name in ("one", "two"):
+        adapter_source = source / name
+        adapter_source.mkdir()
+        (adapter_source / "adapter_model.safetensors").write_bytes(name.encode())
+        manifest = build_manifest(adapter_source, name=name, version="1.0.0", base_model="base", license="MIT")
+        write_bundle(adapter_source, adapter_root / f"{name}-1.0.0", manifest)
+        manifests.append(manifest)
+    composition = build_composition(
+        "bank", "1.0.0", "base",
+        [{"name": manifest["name"], "version": "1.0.0", "manifest_sha256": manifest_digest(manifest), "weight": weight} for manifest, weight in zip(manifests, (0.5, 1.25))],
+    )
+    resolved = resolve_composition_paths(composition, adapter_root)
+    assert [item["name"] for item in resolved] == ["one", "two"]
+    assert [item["weight"] for item in resolved] == [0.5, 1.25]
+
+
+def test_resolve_composition_paths_rejects_changed_bundle(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "adapter_model.safetensors").write_bytes(b"original")
+    manifest = build_manifest(source, name="one", version="1.0.0", base_model="base", license="MIT")
+    root = tmp_path / "adapters"
+    write_bundle(source, root / "one-1.0.0", manifest)
+    (root / "one-1.0.0" / "adapter_model.safetensors").write_bytes(b"changed")
+    composition = build_composition("bank", "1.0.0", "base", [{"name": "one", "version": "1.0.0", "manifest_sha256": manifest_digest(manifest), "weight": 1.0}])
+    with pytest.raises(ValueError, match="sha256 mismatch"):
+        resolve_composition_paths(composition, root)
 
 
 def test_blossom_kind_is_exposed_for_future_server_discovery():

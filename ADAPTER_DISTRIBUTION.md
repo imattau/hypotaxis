@@ -90,6 +90,9 @@ original adapters remain independently downloadable and reversible.
 component's name, version, manifest digest, and runtime weight. Components must
 be unique and use weights from 0 through 2. `compatible_manifests` rejects
 merges across different base models before a composition is published.
+Studio exposes `POST /api/adapters/composition` to create these manifests from
+local bundles. It refuses mismatched base models and retains each source
+manifest digest so a composition can be audited or reversed later.
 
 To prepare a local release bundle:
 

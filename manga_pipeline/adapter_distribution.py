@@ -377,6 +377,38 @@ def compatible_manifests(manifests: Iterable[dict[str, Any]]) -> str:
     return base_models.pop()
 
 
+def resolve_composition_paths(
+    composition: dict[str, Any],
+    adapter_root: str | Path,
+) -> list[dict[str, Any]]:
+    """Resolve and verify local adapter bundles referenced by a composition.
+
+    The returned order and weights are ready for a diffusion pipeline's
+    ``load_lora_weights``/``set_adapters`` calls.  Every on-disk manifest must
+    match the digest recorded in the composition, preventing silent lineage
+    substitution.
+    """
+
+    validate_composition(composition)
+    adapter_root = Path(adapter_root).resolve()
+    resolved: list[dict[str, Any]] = []
+    for component in composition["components"]:
+        bundle = (adapter_root / f"{component['name']}-{component['version']}").resolve()
+        if adapter_root not in bundle.parents:
+            raise ValueError("composition component escapes adapter root")
+        manifest_path = bundle / "manifest.json"
+        manifest = load_manifest(manifest_path)
+        if manifest["name"] != component["name"] or manifest["version"] != component["version"]:
+            raise ValueError(f"manifest identity mismatch for {component['name']}")
+        if manifest_digest(manifest) != component["manifest_sha256"]:
+            raise ValueError(f"manifest digest mismatch for {component['name']}")
+        if manifest["base_model"] != composition["base_model"]:
+            raise ValueError(f"base model mismatch for {component['name']}")
+        verify_bundle(manifest, bundle)
+        resolved.append({"name": component["name"], "version": component["version"], "path": str(bundle), "weight": component["weight"]})
+    return resolved
+
+
 def available_sources(manifest: dict[str, Any], available: Iterable[str]) -> list[str]:
     """Filter advertised sources by availability while preserving preference."""
 

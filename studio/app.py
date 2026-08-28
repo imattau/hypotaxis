@@ -23,6 +23,8 @@ sys.path.insert(0, str(ROOT))
 from manga_pipeline.captioner import Captioner  # noqa: E402
 from manga_pipeline.adapter_distribution import (  # noqa: E402
     build_manifest,
+    build_composition,
+    compatible_manifests,
     build_release_event,
     create_torrent,
     download_torrent,
@@ -230,6 +232,20 @@ class DownloadTorrentRequest(BaseModel):
     manifest: dict
 
 
+class CompositionComponentRequest(BaseModel):
+    name: str = Field(max_length=100)
+    version: str = Field(max_length=50)
+    weight: float = Field(1.0, ge=0, le=2)
+
+
+class CreateCompositionRequest(BaseModel):
+    name: str = Field(max_length=100)
+    version: str = Field(max_length=50)
+    base_model: str = Field(max_length=300)
+    components: list[CompositionComponentRequest] = Field(min_length=1, max_length=20)
+    description: str = Field("", max_length=1000)
+
+
 def _path_under(path_value: str, root: Path) -> Path:
     path = _project_path(path_value).resolve()
     root = root.resolve()
@@ -384,6 +400,63 @@ def start_torrent_download(req: DownloadTorrentRequest):
     thread = threading.Thread(target=_run_torrent_download_job, args=(job_id, req.magnet, req.manifest, destination), daemon=True)
     thread.start()
     return {"job_id": job_id}
+
+
+@app.post("/api/adapters/composition")
+def create_adapter_composition(req: CreateCompositionRequest):
+    """Create a lineage-preserving composition manifest from local adapters."""
+
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", req.name) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", req.version):
+        raise HTTPException(400, "composition name or version contains unsupported characters")
+    manifests = []
+    components = []
+    try:
+        for component in req.components:
+            manifest = load_manifest(_adapter_bundle(component.name, component.version) / "manifest.json")
+            manifests.append(manifest)
+            components.append(
+                {
+                    "name": manifest["name"],
+                    "version": manifest["version"],
+                    "manifest_sha256": manifest_digest(manifest),
+                    "weight": component.weight,
+                }
+            )
+        compatible_base = compatible_manifests(manifests)
+        if req.base_model != compatible_base:
+            raise ValueError("composition base model does not match its components")
+        composition = build_composition(req.name, req.version, compatible_base, components, description=req.description)
+        output = MODELS_DIR / "shared_adapters" / "compositions"
+        output.mkdir(parents=True, exist_ok=True)
+        path = output / f"{req.name}-{req.version}.json"
+        if path.exists():
+            raise FileExistsError(path)
+        path.write_bytes(canonical_json(composition))
+    except HTTPException:
+        raise
+    except FileExistsError:
+        raise HTTPException(409, "composition version already exists")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"composition": composition, "path": str(path.relative_to(ROOT))}
+
+
+@app.get("/api/adapters/compositions")
+def list_adapter_compositions():
+    """List valid local adapter-bank manifests."""
+
+    root = MODELS_DIR / "shared_adapters" / "compositions"
+    compositions = []
+    for path in sorted(root.glob("*.json")) if root.exists() else []:
+        try:
+            composition = json.loads(path.read_text(encoding="utf-8"))
+            from manga_pipeline.adapter_distribution import validate_composition
+
+            validate_composition(composition)
+            compositions.append({"name": composition["name"], "version": composition["version"], "base_model": composition["base_model"], "component_count": len(composition["components"]), "path": str(path.relative_to(ROOT))})
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    return {"compositions": compositions}
 
 
 @app.post("/api/adapters/discover")

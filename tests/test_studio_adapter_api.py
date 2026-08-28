@@ -187,3 +187,83 @@ def test_start_torrent_download_returns_job_id(monkeypatch, tmp_path):
     assert result["job_id"]
     assert len(started) == 1
     assert started[0][1][0] == result["job_id"]
+
+
+def test_create_adapter_composition_preserves_lineage_and_weights(tmp_path, monkeypatch):
+    monkeypatch.setattr(studio_app, "ROOT", tmp_path)
+    monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    from manga_pipeline.adapter_distribution import build_manifest, write_bundle
+
+    source = tmp_path / "source"
+    source.mkdir()
+    for name in ("one", "two"):
+        adapter_source = source / name
+        adapter_source.mkdir()
+        (adapter_source / "adapter_model.safetensors").write_bytes(name.encode())
+        manifest = build_manifest(adapter_source, name=name, version="1.0.0", base_model="base", license="MIT")
+        write_bundle(adapter_source, tmp_path / "models" / "shared_adapters" / f"{name}-1.0.0", manifest)
+    result = studio_app.create_adapter_composition(
+        studio_app.CreateCompositionRequest(
+            name="combined",
+            version="1.0.0",
+            base_model="base",
+            components=[
+                studio_app.CompositionComponentRequest(name="one", version="1.0.0", weight=0.7),
+                studio_app.CompositionComponentRequest(name="two", version="1.0.0", weight=1.2),
+            ],
+        )
+    )
+    assert result["composition"]["components"][0]["weight"] == 0.7
+    assert result["composition"]["components"][1]["manifest_sha256"]
+    assert (tmp_path / result["path"]).exists()
+
+
+def test_create_adapter_composition_rejects_incompatible_base_models(tmp_path, monkeypatch):
+    monkeypatch.setattr(studio_app, "ROOT", tmp_path)
+    monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    from manga_pipeline.adapter_distribution import build_manifest, write_bundle
+
+    source = tmp_path / "source"
+    source.mkdir()
+    for name, base in (("one", "base-a"), ("two", "base-b")):
+        adapter_source = source / name
+        adapter_source.mkdir()
+        (adapter_source / "adapter_model.safetensors").write_bytes(name.encode())
+        manifest = build_manifest(adapter_source, name=name, version="1.0.0", base_model=base, license="MIT")
+        write_bundle(adapter_source, tmp_path / "models" / "shared_adapters" / f"{name}-1.0.0", manifest)
+    with pytest.raises(studio_app.HTTPException, match="incompatible"):
+        studio_app.create_adapter_composition(
+            studio_app.CreateCompositionRequest(
+                name="combined",
+                version="1.0.0",
+                base_model="base-a",
+                components=[
+                    studio_app.CompositionComponentRequest(name="one", version="1.0.0"),
+                    studio_app.CompositionComponentRequest(name="two", version="1.0.0"),
+                ],
+            )
+        )
+
+
+def test_list_adapter_compositions_returns_only_valid_manifests(tmp_path, monkeypatch):
+    monkeypatch.setattr(studio_app, "ROOT", tmp_path)
+    monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    root = tmp_path / "models" / "shared_adapters" / "compositions"
+    root.mkdir(parents=True)
+    (root / "combined-1.0.0.json").write_text(
+        json.dumps(
+            {
+                "schema": "hypotaxis.adapter-composition.v1",
+                "name": "combined",
+                "version": "1.0.0",
+                "base_model": "base",
+                "components": [{"name": "one", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "invalid.json").write_text("{}", encoding="utf-8")
+    result = studio_app.list_adapter_compositions()
+    assert result["compositions"] == [
+        {"name": "combined", "version": "1.0.0", "base_model": "base", "component_count": 1, "path": "models/shared_adapters/compositions/combined-1.0.0.json"}
+    ]
