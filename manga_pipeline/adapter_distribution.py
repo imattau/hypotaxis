@@ -23,9 +23,10 @@ from pathlib import Path
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
-from .adapter_manifest import canonical_json, load_manifest, manifest_bytes, sha256_file, validate_manifest
+from .adapter_manifest import canonical_json, load_manifest, manifest_bytes, sha256_file, validate_evaluations, validate_manifest
 
 NOSTR_RELEASE_KIND = 30078
+NOSTR_COMPOSITION_KIND = 30079
 BLOSSOM_SERVER_LIST_KIND = 10063
 NOSTR_DELETION_KIND = 5
 NOSTR_LABEL_KIND = 1985
@@ -175,6 +176,24 @@ def build_release_event(manifest: dict[str, Any], pubkey: str, created_at: int) 
         "kind": NOSTR_RELEASE_KIND,
         "tags": tags,
         "content": canonical_json(manifest).decode("utf-8"),
+    }
+    event["id"] = nostr_event_id(event)
+    return event
+
+
+def build_composition_event(composition: dict[str, Any], pubkey: str, created_at: int) -> dict[str, Any]:
+    """Build an unsigned replaceable Nostr event for a composed adapter bank."""
+
+    validate_composition(composition)
+    _hex(pubkey, 64, "pubkey")
+    if not isinstance(created_at, int) or created_at < 0:
+        raise ValueError("created_at must be a non-negative integer")
+    event = {
+        "pubkey": pubkey,
+        "created_at": created_at,
+        "kind": NOSTR_COMPOSITION_KIND,
+        "tags": [["d", f"composition:{composition['name']}"], ["version", composition["version"]], ["base-model", composition["base_model"]], ["t", "hypotaxis-adapter-composition"]],
+        "content": canonical_json(composition).decode("utf-8"),
     }
     event["id"] = nostr_event_id(event)
     return event
@@ -482,6 +501,12 @@ def validate_composition(composition: dict[str, Any]) -> None:
         weight = component["weight"]
         if not isinstance(weight, (int, float)) or isinstance(weight, bool) or not math.isfinite(weight) or not 0 <= weight <= 2:
             raise ValueError(f"weight for {component['name']} must be between 0 and 2")
+    if "evaluations" in composition:
+        validate_evaluations(composition["evaluations"])
+    if "community_merge" in composition and not isinstance(composition["community_merge"], bool):
+        raise ValueError("composition community_merge must be a boolean")
+    if composition.get("community_merge") and not composition.get("evaluations"):
+        raise ValueError("community merges require at least one evaluation record")
 
 
 def build_composition(
@@ -491,6 +516,8 @@ def build_composition(
     components: Iterable[dict[str, Any]],
     *,
     description: str = "",
+    evaluations: list[dict[str, Any]] | None = None,
+    community_merge: bool = False,
 ) -> dict[str, Any]:
     """Build a deterministic, lineage-preserving adapter composition."""
 
@@ -503,6 +530,10 @@ def build_composition(
     }
     if description:
         composition["description"] = description
+    if evaluations is not None:
+        composition["evaluations"] = evaluations
+    if community_merge:
+        composition["community_merge"] = True
     validate_composition(composition)
     return composition
 

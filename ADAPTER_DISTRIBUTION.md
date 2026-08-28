@@ -65,6 +65,8 @@ Studio's Community Discovery form now queries user-supplied relays and displays
 release metadata after browser-side Nostr signature verification.
 It can also load the signed NIP-65 kind-10002 read-relay list for the current
 NIP-07 identity, using the manually entered relays as bootstrap sources.
+Discovery keeps only the newest verified event for each creator and parameterized
+adapter identity, avoiding duplicate cards for superseded release versions.
 
 When a discovered release advertises Blossom mirrors, Studio can now request a
 verified install. The request must include the complete signed Nostr release
@@ -120,11 +122,22 @@ merges across different base models before a composition is published.
 Studio exposes `POST /api/adapters/composition` to create these manifests from
 local bundles. It refuses mismatched base models and retains each source
 manifest digest so a composition can be audited or reversed later.
+Compositions can be marked as `community_merge`; that flag requires at least
+one validated evaluation record, preventing an evaluation-free merge from
+being presented as a community release. Local compositions remain opt-in and
+may omit the flag and evaluations.
+Studio can publish a composition as a signed Nostr kind-30079 event. The event
+content contains the complete composition, including component manifest
+digests, weights, lineage, and evaluation evidence, so other clients can audit
+the merge before reconstructing it locally.
 
 Adapter manifests may also include a `training` object with reproducibility
 fields such as `method`, `rank`, `dataset`, `dataset_sha256`, and `examples`.
 These fields are optional for backward compatibility but are validated when
 present and are accepted by the Studio packaging API.
+Studio's packaging form now exposes both training metadata and evaluation
+records as optional JSON fields, and the local registry summarizes them after
+the bundle is written.
 
 Release trust helpers also support NIP-09 revocation requests and NIP-32
 report labels. Revocations require the release author's pubkey and clients can

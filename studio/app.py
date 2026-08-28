@@ -263,6 +263,8 @@ class CreateCompositionRequest(BaseModel):
     base_model: str = Field(max_length=300)
     components: list[CompositionComponentRequest] = Field(min_length=1, max_length=20)
     description: str = Field("", max_length=1000)
+    evaluations: list[dict] | None = None
+    community_merge: bool = False
 
 
 def _path_under(path_value: str, root: Path) -> Path:
@@ -502,7 +504,15 @@ def create_adapter_composition(req: CreateCompositionRequest):
         compatible_base = compatible_manifests(manifests)
         if req.base_model != compatible_base:
             raise ValueError("composition base model does not match its components")
-        composition = build_composition(req.name, req.version, compatible_base, components, description=req.description)
+        composition = build_composition(
+            req.name,
+            req.version,
+            compatible_base,
+            components,
+            description=req.description,
+            evaluations=req.evaluations,
+            community_merge=req.community_merge,
+        )
         output = MODELS_DIR / "shared_adapters" / "compositions"
         output.mkdir(parents=True, exist_ok=True)
         path = output / f"{req.name}-{req.version}.json"
@@ -530,7 +540,7 @@ def list_adapter_compositions():
             from manga_pipeline.adapter_distribution import validate_composition
 
             validate_composition(composition)
-            compositions.append({"name": composition["name"], "version": composition["version"], "base_model": composition["base_model"], "component_count": len(composition["components"]), "path": str(path.relative_to(ROOT))})
+            compositions.append({"name": composition["name"], "version": composition["version"], "base_model": composition["base_model"], "component_count": len(composition["components"]), "evaluation_count": len(composition.get("evaluations", [])), "community_merge": composition.get("community_merge", False), "composition": composition, "path": str(path.relative_to(ROOT))})
         except (OSError, ValueError, json.JSONDecodeError):
             continue
     return {"compositions": compositions}
@@ -549,7 +559,7 @@ def discover_adapters(req: DiscoverAdaptersRequest):
         events = query_nostr_relays(relays, [{"kinds": [NOSTR_RELEASE_KIND], "limit": req.limit}], max_events=req.limit)
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(502, str(exc)) from exc
-    releases = []
+    releases_by_address = {}
     can_verify_signatures = schnorr_available()
     for event in events:
         try:
@@ -561,14 +571,18 @@ def discover_adapters(req: DiscoverAdaptersRequest):
             signature_verified = verify_schnorr_signature(event)
             if not signature_verified:
                 continue
-        releases.append(
-            {
-                "event_id": event["id"],
-                "creator_pubkey": event["pubkey"],
-                "signature_verified": signature_verified,
-                "manifest": manifest,
-            }
-        )
+        address = next((tag[1] for tag in event.get("tags", []) if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "d"), f"adapter:{manifest['name']}")
+        key = f"{event['pubkey']}:{address}"
+        release = {
+            "event_id": event["id"],
+            "creator_pubkey": event["pubkey"],
+            "signature_verified": signature_verified,
+            "manifest": manifest,
+        }
+        previous = releases_by_address.get(key)
+        if previous is None or event["created_at"] > previous["_created_at"]:
+            releases_by_address[key] = {**release, "event": event, "_created_at": event["created_at"]}
+    releases = [{key: value for key, value in release.items() if key != "_created_at"} for release in releases_by_address.values()]
     return {
         "releases": releases,
         "signature_verification": "verified" if can_verify_signatures else "not available",

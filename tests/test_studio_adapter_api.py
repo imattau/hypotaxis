@@ -22,10 +22,14 @@ def test_package_adapter_endpoint_creates_bundle(tmp_path, monkeypatch):
         files=["adapter_model.safetensors"],
         nostr_pubkey="1" * 64,
         created_at=123,
+        training={"method": "lora", "rank": 16, "dataset": "curated-v1"},
+        evaluations=[{"name": "heldout", "dataset": "corpus-v1", "score": 0.82}],
     )
     result = studio_app.package_adapter(request)
     assert result["manifest"]["name"] == "grounding"
     assert result["event"]["kind"] == 30078
+    assert result["manifest"]["training"]["rank"] == 16
+    assert result["manifest"]["evaluations"][0]["score"] == 0.82
     assert (models / "shared_adapters" / "grounding-1.0.0" / "manifest.json").exists()
 
 
@@ -121,6 +125,25 @@ def test_discover_adapters_returns_valid_release_metadata(monkeypatch):
 def test_discover_adapters_requires_relay(monkeypatch):
     with pytest.raises(studio_app.HTTPException, match="relay URL"):
         studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=[]))
+
+
+def test_discover_adapters_returns_newest_parameterized_release(monkeypatch):
+    from manga_pipeline.adapter_distribution import build_release_event
+
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    older = build_release_event(manifest, "1" * 64, 123)
+    older["sig"] = "2" * 128
+    newer_manifest = {**manifest, "version": "1.1.0"}
+    newer = build_release_event(newer_manifest, "1" * 64, 124)
+    newer["sig"] = "2" * 128
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    monkeypatch.setattr(studio_app, "query_nostr_relays", lambda *_args, **_kwargs: [older, newer])
+    result = studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+    assert len(result["releases"]) == 1
+    assert result["releases"][0]["manifest"]["version"] == "1.1.0"
 
 
 def test_install_adapter_endpoint_returns_installed_bundle(monkeypatch, tmp_path):
@@ -360,7 +383,7 @@ def test_list_adapter_compositions_returns_only_valid_manifests(tmp_path, monkey
     (root / "invalid.json").write_text("{}", encoding="utf-8")
     result = studio_app.list_adapter_compositions()
     assert result["compositions"] == [
-        {"name": "combined", "version": "1.0.0", "base_model": "base", "component_count": 1, "path": "models/shared_adapters/compositions/combined-1.0.0.json"}
+        {"name": "combined", "version": "1.0.0", "base_model": "base", "component_count": 1, "evaluation_count": 0, "community_merge": False, "composition": {"schema": "hypotaxis.adapter-composition.v1", "name": "combined", "version": "1.0.0", "base_model": "base", "components": [{"name": "one", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}]}, "path": "models/shared_adapters/compositions/combined-1.0.0.json"}
     ]
 
 

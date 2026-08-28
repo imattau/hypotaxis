@@ -8,6 +8,7 @@ from manga_pipeline.adapter_distribution import (
     NOSTR_DELETION_KIND,
     NOSTR_LABEL_KIND,
     NOSTR_RELEASE_KIND,
+    NOSTR_COMPOSITION_KIND,
     available_sources,
     blossom_authorization_header,
     check_blossom_servers,
@@ -15,6 +16,7 @@ from manga_pipeline.adapter_distribution import (
     blossom_servers,
     build_manifest,
     build_composition,
+    build_composition_event,
     build_release_event,
     build_release_report_event,
     build_release_rating_event,
@@ -537,6 +539,39 @@ def test_composition_preserves_components_and_lineage():
     )
     validate_composition(composition)
     assert composition["components"][1]["manifest_sha256"] == "b" * 64
+
+
+def test_composition_accepts_valid_evaluation_records_and_rejects_bad_scores():
+    component = {"name": "style", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}
+    composition = build_composition("combined", "1.0.0", "base", [component], evaluations=[{"name": "heldout", "dataset": "corpus-v1", "score": 0.82}])
+    assert composition["evaluations"][0]["score"] == 0.82
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        build_composition("combined", "1.0.0", "base", [component], evaluations=[{"name": "heldout", "dataset": "corpus-v1", "score": 1.2}])
+    with pytest.raises(ValueError, match="require at least one evaluation"):
+        build_composition("combined", "1.0.0", "base", [component], community_merge=True)
+    gated = build_composition(
+        "combined",
+        "1.0.0",
+        "base",
+        [component],
+        evaluations=[{"name": "heldout", "dataset": "corpus-v1", "score": 0.82}],
+        community_merge=True,
+    )
+    assert gated["community_merge"] is True
+
+
+def test_build_composition_event_preserves_lineage_and_evaluation_content():
+    composition = build_composition(
+        "combined",
+        "1.0.0",
+        "base",
+        [{"name": "style", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}],
+        evaluations=[{"name": "heldout", "dataset": "corpus-v1", "score": 0.82}],
+    )
+    event = build_composition_event(composition, "1" * 64, 123)
+    assert event["kind"] == NOSTR_COMPOSITION_KIND
+    assert json.loads(event["content"]) == composition
+    assert [tag for tag in event["tags"] if tag[0] == "t"] == [["t", "hypotaxis-adapter-composition"]]
 
 
 def test_composition_rejects_duplicate_components_and_bad_weights():

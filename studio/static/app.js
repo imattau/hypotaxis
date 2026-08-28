@@ -176,6 +176,10 @@ function showAdapters() {
       <input type="text" id="adapter-magnet" />
       <label>Nostr public key (optional; emits an unsigned event template)</label>
       <input type="text" id="adapter-pubkey" />
+      <label>Training metadata (optional JSON object)</label>
+      <textarea id="adapter-training" class="compact-textarea" placeholder='{"method":"lora","rank":16,"dataset":"curated-v1"}'></textarea>
+      <label>Evaluation records (optional JSON array)</label>
+      <textarea id="adapter-evaluations" class="compact-textarea" placeholder='[{"name":"heldout","dataset":"corpus-v1","score":0.82}]'></textarea>
       <button class="btn" type="submit">Package Adapter</button>
       <div class="status-line" id="adapter-package-status"></div>
     </form>
@@ -188,7 +192,13 @@ function showAdapters() {
     status.classList.remove("error");
     status.textContent = "Packaging and verifying...";
     const lines = (id) => document.getElementById(id).value.split("\n").map((line) => line.trim()).filter(Boolean);
+    const optionalJson = (id, fallback) => {
+      const raw = document.getElementById(id).value.trim();
+      return raw ? JSON.parse(raw) : fallback;
+    };
     try {
+      const training = optionalJson("adapter-training", null);
+      const evaluations = optionalJson("adapter-evaluations", null);
       const result = await api("/api/adapters/package", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -202,6 +212,8 @@ function showAdapters() {
           blossom: lines("adapter-blossom"),
           magnet: document.getElementById("adapter-magnet").value.trim() || null,
           nostr_pubkey: document.getElementById("adapter-pubkey").value.trim() || null,
+          training,
+          evaluations,
         }),
       });
       status.textContent = `Created ${result.manifest_path} (${result.manifest.files.length} file(s) verified).`;
@@ -225,6 +237,9 @@ function showAdapters() {
       <input type="text" id="composition-base" required />
       <label>Components</label>
       <textarea id="composition-components" class="compact-textarea" placeholder="grounding@1.0.0=0.7&#10;style@1.0.0=1.0" required></textarea>
+      <label>Evaluation records (optional JSON array)</label>
+      <textarea id="composition-evaluations" class="compact-textarea" placeholder='[{"name":"heldout-set","dataset":"corpus-v1","score":0.82}]'></textarea>
+      <label><input type="checkbox" id="composition-community-merge" /> Mark as community merge (requires evaluations)</label>
       <button class="btn secondary" type="submit">Create Composition</button>
       <div class="status-line" id="composition-status"></div>
     </form>
@@ -277,6 +292,15 @@ async function createComposition(event) {
   const form = event.currentTarget;
   const button = form.querySelector("button");
   const status = form.querySelector("#composition-status");
+  let evaluations;
+  try {
+    const rawEvaluations = form.querySelector("#composition-evaluations").value.trim();
+    evaluations = rawEvaluations ? JSON.parse(rawEvaluations) : undefined;
+  } catch (_) {
+    status.textContent = "Error: evaluations must be valid JSON.";
+    status.classList.add("error");
+    return;
+  }
   const components = form.querySelector("#composition-components").value.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
     const [adapter, rawWeight = "1"] = line.split("=");
     const at = adapter.lastIndexOf("@");
@@ -295,6 +319,8 @@ async function createComposition(event) {
         version: form.querySelector("#composition-version").value.trim(),
         base_model: form.querySelector("#composition-base").value.trim(),
         components,
+        evaluations,
+        community_merge: form.querySelector("#composition-community-merge").checked,
       }),
     });
     status.textContent = `Created ${result.path}`;
@@ -317,11 +343,49 @@ async function loadCompositions(holder) {
     }
     const grid = el(`<div class="grid"></div>`);
     for (const composition of compositions) {
-      grid.appendChild(el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.component_count} component(s)</div><div class="meta">${escapeHtml(composition.path)}</div></div>`));
+      const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.component_count} component(s)</div><div class="meta">${composition.community_merge ? "Community merge" : "Local composition"} · ${composition.evaluation_count ? `${composition.evaluation_count} evaluation record(s)` : "No evaluation records"}</div><div class="meta">${escapeHtml(composition.path)}</div><button class="btn secondary publish-composition" type="button">Publish to Nostr</button><div class="status-line composition-status"></div></div>`);
+      card.querySelector(".publish-composition").addEventListener("click", () => publishComposition(composition, card));
+      grid.appendChild(card);
     }
     holder.appendChild(grid);
   } catch (e) {
     holder.innerHTML = `<div class="section-title">Adapter Compositions</div><p class="status-line error">Could not load compositions: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function publishComposition(entry, card) {
+  const button = card.querySelector(".publish-composition");
+  const status = card.querySelector(".composition-status");
+  const relays = document.getElementById("adapter-relays").value.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!window.nostr || typeof window.nostr.signEvent !== "function") {
+    status.textContent = "A NIP-07 browser signer is required to publish compositions.";
+    status.classList.add("error");
+    return;
+  }
+  if (!relays.length) {
+    status.textContent = "Enter or load at least one relay first.";
+    status.classList.add("error");
+    return;
+  }
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Signing composition...";
+  try {
+    const composition = entry.composition;
+    const signed = await window.nostr.signEvent({
+      kind: 30079,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [["d", `composition:${composition.name}`], ["version", composition.version], ["base-model", composition.base_model], ["t", "hypotaxis-adapter-composition"]],
+      content: stableJson(composition),
+    });
+    if (!verifyEvent(signed)) throw new Error("signer returned an invalid event");
+    await Promise.any(nostrPool.publish(relays, signed));
+    status.textContent = "Published to Nostr.";
+    button.textContent = "Published";
+  } catch (error) {
+    status.textContent = "Publish failed: " + error.message;
+    status.classList.add("error");
+    button.disabled = false;
   }
 }
 
@@ -350,6 +414,14 @@ async function discoverAdapters(event) {
         }
       })
       .filter(Boolean);
+    const newestReleases = new Map();
+    for (const release of releases) {
+      const dTag = release.event.tags.find((tag) => tag[0] === "d")?.[1] || `adapter:${release.manifest.name}`;
+      const key = `${release.creator_pubkey}:${dTag}`;
+      const previous = newestReleases.get(key);
+      if (!previous || release.event.created_at > previous.event.created_at) newestReleases.set(key, release);
+    }
+    releases = [...newestReleases.values()];
     if (releases.length) {
       const deletionEvents = (await nostrPool.querySync(relays, { kinds: [5], "#e": releases.map((release) => release.event_id), limit: 100 }))
         .filter((deletion) => verifyEvent(deletion));
@@ -560,6 +632,8 @@ async function loadLocalAdapters(holder) {
         <div class="meta">${escapeHtml(adapter.base_model)} &middot; ${adapter.file_count} file(s)</div>
         <div class="meta">manifest ${escapeHtml(adapter.manifest_sha256.slice(0, 16))}...</div>
         <div class="meta">${escapeHtml(adapter.bundle_dir)}</div>
+        ${adapter.manifest.training ? `<div class="meta">Training: ${escapeHtml(adapter.manifest.training.method || "specified")}${adapter.manifest.training.rank ? ` · rank ${adapter.manifest.training.rank}` : ""}</div>` : ""}
+        ${Array.isArray(adapter.manifest.evaluations) && adapter.manifest.evaluations.length ? `<div class="meta">Evaluations: ${adapter.manifest.evaluations.length}</div>` : ""}
         <div class="meta torrent-state">BitTorrent: ${adapter.torrent_exists ? `ready (${escapeHtml(adapter.torrent_path)})` : adapter.torrent_available ? "not created" : "libtorrent unavailable"}</div>
         ${adapter.torrent_available && !adapter.torrent_exists ? `<button class="btn secondary create-torrent" type="button">Create Torrent</button>` : ""}
         ${adapter.torrent_exists ? `<button class="btn secondary seed-torrent" type="button">Start Seeding</button>` : ""}
