@@ -65,9 +65,13 @@ Studio's Community Discovery form now queries user-supplied relays and displays
 release metadata after browser-side Nostr signature verification.
 
 When a discovered release advertises Blossom mirrors, Studio can now request a
-verified install. Each declared file is downloaded to a temporary directory,
-checked against its manifest digest, and atomically moved into the local shared
-adapter registry only after the complete bundle verifies.
+verified install. The request must include the complete signed Nostr release
+event; Studio checks that the event's manifest exactly matches the requested
+manifest and verifies its Schnorr signature whenever `coincurve` is available.
+Each declared file is then downloaded to a temporary directory, checked against
+its manifest digest, and atomically moved into the local shared adapter registry
+only after the complete bundle verifies. This prevents a client from replacing
+trusted release metadata with a different manifest at install time.
 
 BitTorrent support is isolated behind the optional `libtorrent` dependency.
 `create_torrent` creates a torrent for a verified bundle, while
@@ -79,6 +83,9 @@ can fall back to Blossom mirrors.
 completed bundle available to peers; downloading alone does not start seeding.
 Studio exposes Start/Stop Seeding controls for verified local bundles and
 reports the active seeder's peer and upload-rate state.
+Torrent downloads initiated by Studio also require the signed release event and
+use the same manifest/event and Schnorr checks as Blossom installation before a
+job is launched.
 
 Studio's Adapters tab now reports local BitTorrent availability and metadata
 state, and can create a `.torrent` for a packaged bundle. The torrent is stored

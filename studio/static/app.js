@@ -290,7 +290,7 @@ async function discoverAdapters(event) {
         try {
           const manifest = JSON.parse(release.content);
           if (manifest.schema !== "hypotaxis.adapter.v1" || !Array.isArray(manifest.files) || !manifest.files.length) return null;
-          return { event_id: release.id, creator_pubkey: release.pubkey, signature_verified: true, manifest };
+          return { event_id: release.id, creator_pubkey: release.pubkey, signature_verified: true, event: release, manifest };
         } catch (_) {
           return null;
         }
@@ -339,6 +339,9 @@ async function discoverAdapters(event) {
         <div class="card">
           <h3>${escapeHtml(manifest.name)} <span class="badge">${escapeHtml(manifest.version)}</span></h3>
           <div class="meta">${escapeHtml(manifest.base_model)} &middot; ${manifest.files.length} file(s)</div>
+          <div class="meta">License: ${escapeHtml(manifest.license || "unspecified")}</div>
+          ${manifest.training ? `<div class="meta">Training: ${escapeHtml(manifest.training.method || "unspecified")}${manifest.training.rank ? ` · rank ${manifest.training.rank}` : ""}${manifest.training.examples !== undefined ? ` · ${manifest.training.examples} examples` : ""}</div>` : ""}
+          ${Array.isArray(manifest.evaluations) && manifest.evaluations.length ? `<div class="meta">Evaluations: ${manifest.evaluations.map((evaluation) => `${escapeHtml(evaluation.name)} ${Number(evaluation.score).toFixed(2)}`).join(" · ")}</div>` : ""}
           <div class="meta">Creator: ${escapeHtml(release.creator_pubkey.slice(0, 16))}...</div>
           <div class="meta">Trust: Nostr signature verified</div>
           <div class="meta">Community rating: ${release.rating_average === null ? "none yet" : `${release.rating_average.toFixed(1)}/5 (${release.rating_count})`}</div>
@@ -427,7 +430,7 @@ async function downloadAdapterTorrent(release, button) {
     const { job_id } = await api("/api/adapters/torrent/download", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ magnet: release.manifest.distribution.torrent.magnet, manifest: release.manifest }),
+      body: JSON.stringify({ magnet: release.manifest.distribution.torrent.magnet, manifest: release.manifest, release_event: release.event }),
     });
     const poll = async () => {
       const job = await api(`/api/jobs/${job_id}`);
@@ -465,7 +468,7 @@ async function installAdapter(release, button) {
     const result = await api("/api/adapters/install", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ manifest: release.manifest }),
+      body: JSON.stringify({ manifest: release.manifest, release_event: release.event }),
     });
     status.textContent = `Installed at ${result.bundle_dir}`;
     button.remove();

@@ -201,6 +201,7 @@ class PackageAdapterRequest(BaseModel):
     nostr_pubkey: str | None = Field(None, max_length=64)
     created_at: int | None = None
     training: dict | None = None
+    evaluations: list[dict] | None = None
 
 
 class CreateTorrentRequest(BaseModel):
@@ -216,6 +217,7 @@ class DiscoverAdaptersRequest(BaseModel):
 
 class InstallAdapterRequest(BaseModel):
     manifest: dict
+    release_event: dict
 
 
 class UploadAdapterRequest(BaseModel):
@@ -240,6 +242,7 @@ class BlossomHealthRequest(BaseModel):
 class DownloadTorrentRequest(BaseModel):
     magnet: str = Field(max_length=4000)
     manifest: dict
+    release_event: dict
 
 
 class SeedAdapterRequest(BaseModel):
@@ -298,6 +301,7 @@ def package_adapter(req: PackageAdapterRequest):
             files=req.files or None,
             distribution=distribution or None,
             training=req.training,
+            evaluations=req.evaluations,
         )
         manifest_path = write_bundle(source, output, manifest)
         event = None
@@ -418,6 +422,10 @@ def _run_torrent_download_job(job_id: str, magnet: str, manifest: dict, destinat
 def start_torrent_download(req: DownloadTorrentRequest):
     """Start a verified magnet download and expose progress through /api/jobs."""
 
+    try:
+        _validate_release_for_manifest(req.manifest, req.release_event)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     job_id = _create_job()
     destination = MODELS_DIR / "shared_adapters" / f".torrent-download-{job_id}"
     thread = threading.Thread(target=_run_torrent_download_job, args=(job_id, req.magnet, req.manifest, destination), daemon=True)
@@ -567,11 +575,22 @@ def discover_adapters(req: DiscoverAdaptersRequest):
     }
 
 
+def _validate_release_for_manifest(manifest: dict, release_event: dict) -> None:
+    """Require transport requests to retain the signed release provenance."""
+
+    signed_manifest = parse_release_event(release_event)
+    if signed_manifest != manifest:
+        raise ValueError("release event manifest does not match install manifest")
+    if schnorr_available() and not verify_schnorr_signature(release_event):
+        raise ValueError("release event signature is invalid")
+
+
 @app.post("/api/adapters/install")
 def install_adapter(req: InstallAdapterRequest):
     """Install a discovered adapter after verified Blossom downloads."""
 
     try:
+        _validate_release_for_manifest(req.manifest, req.release_event)
         target = install_from_blossom(req.manifest, MODELS_DIR / "shared_adapters")
     except FileExistsError:
         raise HTTPException(409, "adapter version is already installed")

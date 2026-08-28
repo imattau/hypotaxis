@@ -125,12 +125,51 @@ def test_discover_adapters_requires_relay(monkeypatch):
 
 def test_install_adapter_endpoint_returns_installed_bundle(monkeypatch, tmp_path):
     monkeypatch.setattr(studio_app, "ROOT", tmp_path)
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
     target = tmp_path / "models" / "shared_adapters" / "grounding-1.0.0"
     monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
     monkeypatch.setattr(studio_app, "install_from_blossom", lambda manifest, root: target)
-    manifest = {"name": "grounding", "version": "1.0.0"}
-    result = studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=manifest))
+    event_manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    from manga_pipeline.adapter_distribution import build_release_event
+
+    event = build_release_event(event_manifest, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    result = studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=event_manifest, release_event=event))
     assert result["installed"] is True
+
+
+def test_install_adapter_rejects_manifest_event_mismatch(monkeypatch):
+    monkeypatch.setattr(studio_app, "install_from_blossom", lambda *_args: pytest.fail("install should not start"))
+    event_manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    from manga_pipeline.adapter_distribution import build_release_event
+
+    event = build_release_event(event_manifest, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    requested_manifest = {**event_manifest, "version": "2.0.0"}
+    with pytest.raises(studio_app.HTTPException, match="does not match"):
+        studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=requested_manifest, release_event=event))
+
+
+def test_install_adapter_rejects_invalid_signature(monkeypatch):
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: True)
+    monkeypatch.setattr(studio_app, "verify_schnorr_signature", lambda _event: False)
+    monkeypatch.setattr(studio_app, "install_from_blossom", lambda *_args: pytest.fail("install should not start"))
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    from manga_pipeline.adapter_distribution import build_release_event
+
+    event = build_release_event(manifest, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    with pytest.raises(studio_app.HTTPException, match="signature is invalid"):
+        studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=manifest, release_event=event))
 
 
 def test_upload_adapter_endpoint_verifies_bundle_and_uploads_each_file(tmp_path, monkeypatch):
@@ -195,6 +234,7 @@ def test_check_adapter_blossom_health_endpoint(monkeypatch):
 
 def test_start_torrent_download_returns_job_id(monkeypatch, tmp_path):
     monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
     started = []
 
     class FakeThread:
@@ -205,15 +245,43 @@ def test_start_torrent_download_returns_job_id(monkeypatch, tmp_path):
             return None
 
     monkeypatch.setattr(studio_app.threading, "Thread", FakeThread)
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    from manga_pipeline.adapter_distribution import build_release_event
+
+    event = build_release_event(manifest, "1" * 64, 123)
+    event["sig"] = "2" * 128
     result = studio_app.start_torrent_download(
         studio_app.DownloadTorrentRequest(
             magnet="magnet:?xt=urn:btih:abc",
-            manifest={"name": "grounding", "version": "1.0.0"},
+            manifest=manifest,
+            release_event=event,
         )
     )
     assert result["job_id"]
     assert len(started) == 1
     assert started[0][1][0] == result["job_id"]
+
+
+def test_start_torrent_download_rejects_untrusted_release(monkeypatch):
+    monkeypatch.setattr(studio_app, "install_from_blossom", lambda *_args: pytest.fail("not relevant"))
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    from manga_pipeline.adapter_distribution import build_release_event
+
+    event = build_release_event(manifest, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    requested_manifest = {**manifest, "version": "2.0.0"}
+    with pytest.raises(studio_app.HTTPException, match="does not match"):
+        studio_app.start_torrent_download(
+            studio_app.DownloadTorrentRequest(
+                magnet="magnet:?xt=urn:btih:abc", manifest=requested_manifest, release_event=event
+            )
+        )
 
 
 def test_create_adapter_composition_preserves_lineage_and_weights(tmp_path, monkeypatch):

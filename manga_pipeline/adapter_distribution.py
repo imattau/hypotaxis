@@ -571,6 +571,7 @@ def build_manifest(
     distribution: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     training: dict[str, Any] | None = None,
+    evaluations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a manifest from explicitly selected files in an adapter directory."""
 
@@ -603,6 +604,8 @@ def build_manifest(
         manifest["metadata"] = metadata
     if training:
         manifest["training"] = training
+    if evaluations:
+        manifest["evaluations"] = evaluations
     validate_manifest(manifest)
     return manifest
 

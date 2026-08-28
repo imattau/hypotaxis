@@ -56,6 +56,28 @@ def validate_training_metadata(training: Any) -> None:
         raise ValueError("training.examples must be a non-negative integer")
 
 
+def validate_evaluations(evaluations: Any) -> None:
+    """Validate optional benchmark results published with an adapter."""
+
+    if not isinstance(evaluations, list):
+        raise ValueError("evaluations must be a list")
+    for evaluation in evaluations:
+        if not isinstance(evaluation, dict):
+            raise ValueError("each evaluation must be an object")
+        for field in ("name", "dataset", "score"):
+            if field not in evaluation:
+                raise ValueError(f"evaluation missing {field}")
+        if not isinstance(evaluation["name"], str) or not evaluation["name"].strip():
+            raise ValueError("evaluation.name must be a non-empty string")
+        if not isinstance(evaluation["dataset"], str) or not evaluation["dataset"].strip():
+            raise ValueError("evaluation.dataset must be a non-empty string")
+        score = evaluation["score"]
+        if not isinstance(score, (int, float)) or isinstance(score, bool) or not 0 <= score <= 1:
+            raise ValueError("evaluation.score must be between 0 and 1")
+        if "dataset_sha256" in evaluation:
+            _require_sha256(evaluation["dataset_sha256"], "evaluation.dataset_sha256")
+
+
 def validate_manifest(manifest: dict[str, Any]) -> None:
     """Validate the interoperable, security-relevant manifest fields."""
 
@@ -86,6 +108,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("distribution.blossom must be a list")
     if "training" in manifest:
         validate_training_metadata(manifest["training"])
+    if "evaluations" in manifest:
+        validate_evaluations(manifest["evaluations"])
 
 
 def load_manifest(path: str | Path) -> dict[str, Any]:

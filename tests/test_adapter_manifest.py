@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from manga_pipeline.adapter_manifest import load_manifest, manifest_bytes, sha256_file, validate_manifest, validate_training_metadata
+from manga_pipeline.adapter_manifest import load_manifest, manifest_bytes, sha256_file, validate_evaluations, validate_manifest, validate_training_metadata
 
 
 def _manifest():
@@ -64,4 +64,18 @@ def test_training_metadata_validates_reproducibility_fields():
 def test_manifest_accepts_training_metadata():
     manifest = _manifest()
     manifest["training"] = {"method": "lora", "rank": 8, "examples": 12}
+    validate_manifest(manifest)
+
+
+def test_evaluations_validate_scores_and_dataset_identity():
+    validate_evaluations([{"name": "caption-bleu", "dataset": "corpus-v1", "dataset_sha256": "b" * 64, "score": 0.82}])
+    with pytest.raises(ValueError, match="between 0 and 1"):
+        validate_evaluations([{"name": "x", "dataset": "d", "score": 1.1}])
+    with pytest.raises(ValueError, match="missing score"):
+        validate_evaluations([{"name": "x", "dataset": "d"}])
+
+
+def test_manifest_accepts_evaluations():
+    manifest = _manifest()
+    manifest["evaluations"] = [{"name": "caption-bleu", "dataset": "corpus-v1", "score": 0.8}]
     validate_manifest(manifest)
