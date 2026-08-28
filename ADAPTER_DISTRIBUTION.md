@@ -151,12 +151,23 @@ Studio's packaging form now exposes both training metadata and evaluation
 records as optional JSON fields, and the local registry summarizes them after
 the bundle is written.
 
-Release trust helpers also support NIP-09 revocation requests and NIP-32
-report labels. Revocations require the release author's pubkey and clients can
-use `release_is_revoked` to hide matching releases; report labels preserve a
-separate moderation trail without modifying the release manifest.
+Release trust helpers support NIP-09 revocation requests for both adapter
+releases and compositions, plus NIP-32 report labels. Revocations require the
+artifact author's pubkey and clients can use `release_is_revoked` to hide
+matching artifacts; Studio exposes reporting for both artifact types. Report
+labels preserve a separate moderation trail without modifying the release
+manifest.
 Studio discovery also supports signed 1–5 ratings using the
-`hypotaxis.adapter.rating` label namespace.
+`hypotaxis.adapter.rating` label namespace for both releases and compositions.
+It keeps the latest rating from each author and displays average/count for
+active releases and compositions.
+Discovery also summarizes verified NIP-32 report labels per active artifact,
+deduplicating repeated reports from the same author and showing the reported
+reasons alongside the artifact. Reports are informational; revocation remains
+an author-controlled NIP-09 action.
+The packaging form can load the author's verified NIP-10063 Blossom server
+list from the configured Nostr relays and use the resulting servers as mirror
+targets. Only signed events and HTTP(S) server URLs are accepted.
 
 To prepare a local release bundle:
 

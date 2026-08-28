@@ -615,11 +615,16 @@ def discover_adapters(req: DiscoverAdaptersRequest):
             composition = parse_composition_event(event)
         except (ValueError, json.JSONDecodeError):
             continue
+        signature_verified = False
+        if can_verify_signatures:
+            signature_verified = verify_schnorr_signature(event)
+            if not signature_verified:
+                continue
         address = next((tag[1] for tag in event.get("tags", []) if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "d"), f"composition:{composition['name']}")
         key = f"{event['pubkey']}:{address}"
         previous = compositions_by_address.get(key)
         if previous is None or event["created_at"] > previous["_created_at"]:
-            compositions_by_address[key] = {"event_id": event["id"], "creator_pubkey": event["pubkey"], "signature_verified": can_verify_signatures and verify_schnorr_signature(event), "composition": composition, "_created_at": event["created_at"]}
+            compositions_by_address[key] = {"event_id": event["id"], "creator_pubkey": event["pubkey"], "signature_verified": signature_verified, "composition": composition, "_created_at": event["created_at"]}
     compositions = [{key: value for key, value in item.items() if key != "_created_at"} for item in compositions_by_address.values()]
     if compositions:
         deletion_events = query_nostr_relays(relays, [{"kinds": [5], "#e": [item["event_id"] for item in compositions], "limit": req.limit * 5}], max_events=req.limit * 5)

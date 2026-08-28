@@ -106,6 +106,30 @@ function base64Url(value) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
+async function loadReportSummaries(relays, targetIds) {
+  const summaries = new Map();
+  if (!targetIds.length) return summaries;
+  const reportEvents = (await nostrPool.querySync(relays, { kinds: [1985], "#e": targetIds, limit: 500 }))
+    .filter((report) => verifyEvent(report));
+  const latestReports = new Map();
+  for (const report of reportEvents) {
+    const label = report.tags.find((tag) => tag[0] === "l" && tag[2] === "hypotaxis.adapter.report");
+    const target = report.tags.find((tag) => tag[0] === "e")?.[1];
+    if (!target || !targetIds.includes(target) || !label?.[1]) continue;
+    const key = `${target}:${report.pubkey}:${label[1]}`;
+    if (!latestReports.has(key) || latestReports.get(key).created_at < report.created_at) {
+      latestReports.set(key, { target, reason: label[1], created_at: report.created_at });
+    }
+  }
+  for (const report of latestReports.values()) {
+    const summary = summaries.get(report.target) || { count: 0, reasons: new Map() };
+    summary.count += 1;
+    summary.reasons.set(report.reason, (summary.reasons.get(report.reason) || 0) + 1);
+    summaries.set(report.target, summary);
+  }
+  return summaries;
+}
+
 // ---------- Dataset Curation ----------
 
 async function showDatasetCuration() {
@@ -144,6 +168,7 @@ function showAdapters() {
       <label>Nostr relay URLs (one per line)</label>
       <textarea id="adapter-relays" class="compact-textarea" placeholder="wss://relay.example"></textarea>
       <button class="btn secondary" id="load-nostr-relays" type="button">Load My Nostr Relays</button>
+      <button class="btn secondary" id="load-blossom-servers" type="button">Load My Blossom Servers</button>
       <button class="btn secondary" type="submit">Discover Adapters</button>
       <div class="status-line" id="adapter-discovery-status"></div>
       <div id="adapter-discovery-results"></div>
@@ -151,6 +176,7 @@ function showAdapters() {
   `);
   discovery.addEventListener("submit", discoverAdapters);
   discovery.querySelector("#load-nostr-relays").addEventListener("click", loadNostrRelays);
+  discovery.querySelector("#load-blossom-servers").addEventListener("click", loadBlossomServers);
   main.appendChild(discovery);
   const registry = el(`<div id="local-adapter-registry"><div class="section-title">Local Adapter Registry</div><p class="empty-state">Loading local bundles...</p></div>`);
   main.appendChild(registry);
@@ -281,6 +307,44 @@ async function loadNostrRelays() {
     status.textContent = `Loaded ${new Set(relays).size} read relay(s) from your signed relay list.`;
   } catch (error) {
     status.textContent = "Could not load relay list: " + error.message;
+    status.classList.add("error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function loadBlossomServers() {
+  const button = document.getElementById("load-blossom-servers");
+  const relayTextarea = document.getElementById("adapter-relays");
+  const serverTextarea = document.getElementById("adapter-blossom");
+  const status = document.getElementById("adapter-discovery-status");
+  const bootstrapRelays = relayTextarea.value.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!window.nostr || typeof window.nostr.getPublicKey !== "function") {
+    status.textContent = "A NIP-07 browser signer is required to load your Blossom server list.";
+    status.classList.add("error");
+    return;
+  }
+  if (!bootstrapRelays.length) {
+    status.textContent = "Enter at least one bootstrap relay first.";
+    status.classList.add("error");
+    return;
+  }
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Loading your signed Blossom server list...";
+  try {
+    const pubkey = await window.nostr.getPublicKey();
+    const events = await nostrPool.querySync(bootstrapRelays, { kinds: [10063], authors: [pubkey], limit: 10 });
+    const latest = events.filter((event) => verifyEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+    if (!latest) throw new Error("no verified Blossom server-list event found");
+    const servers = latest.tags
+      .filter((tag) => tag[0] === "server" && /^https?:\/\//.test(tag[1]))
+      .map((tag) => tag[1].replace(/\/$/, ""));
+    if (!servers.length) throw new Error("server-list event contains no HTTP(S) servers");
+    serverTextarea.value = [...new Set(servers)].join("\n");
+    status.textContent = `Loaded ${new Set(servers).size} Blossom server(s) into the packaging form.`;
+  } catch (error) {
+    status.textContent = "Could not load Blossom server list: " + error.message;
     status.classList.add("error");
   } finally {
     button.disabled = false;
@@ -428,10 +492,12 @@ async function discoverAdapters(event) {
         .filter((deletion) => verifyEvent(deletion));
       releases = releases.filter((release) => !deletionEvents.some((deletion) => deletion.pubkey === release.creator_pubkey && deletion.tags.some((tag) => tag[0] === "e" && tag[1] === release.event_id)));
       if (!releases.length) {
-        status.textContent = "No active verified releases found.";
+        status.textContent = "No active verified releases found; checking compositions...";
         results.innerHTML = "<p class='empty-state'>No active Hypotaxis releases found.</p>";
-        return;
       }
+    }
+    const releaseReports = await loadReportSummaries(relays, releases.map((release) => release.event_id));
+    if (releases.length) {
       const ratingEvents = (await nostrPool.querySync(relays, { kinds: [1985], "#e": releases.map((release) => release.event_id), limit: 500 }))
         .filter((rating) => verifyEvent(rating));
       const latestRatings = new Map();
@@ -452,7 +518,8 @@ async function discoverAdapters(event) {
       }
       releases = releases.map((release) => {
         const aggregate = aggregates.get(release.event_id) || { total: 0, count: 0 };
-        return { ...release, rating_average: aggregate.count ? aggregate.total / aggregate.count : null, rating_count: aggregate.count };
+        const reports = releaseReports.get(release.event_id);
+        return { ...release, rating_average: aggregate.count ? aggregate.total / aggregate.count : null, rating_count: aggregate.count, report_count: reports?.count || 0, report_reasons: reports ? [...reports.reasons.entries()] : [] };
       });
     }
     status.textContent = `${releases.length} verified release(s) found.`;
@@ -475,6 +542,7 @@ async function discoverAdapters(event) {
           <div class="meta">Creator: ${escapeHtml(release.creator_pubkey.slice(0, 16))}...</div>
           <div class="meta">Trust: Nostr signature verified</div>
           <div class="meta">Community rating: ${release.rating_average === null ? "none yet" : `${release.rating_average.toFixed(1)}/5 (${release.rating_count})`}</div>
+          ${release.report_count ? `<div class="meta">Community reports: ${release.report_count} (${release.report_reasons.map(([reason, count]) => `${escapeHtml(reason)} ${count}`).join(" · ")})</div>` : ""}
           <div class="meta">Event: ${escapeHtml(release.event_id.slice(0, 16))}...</div>
           ${Array.isArray(manifest.distribution?.blossom) && manifest.distribution.blossom.length ? installAction : ""}
           ${manifest.distribution?.torrent?.magnet && installable ? `<button class="btn secondary torrent-download" type="button">${localVersion ? "Update via BitTorrent" : "Download via BitTorrent"}</button>` : ""}
@@ -512,6 +580,24 @@ async function discoverAdapters(event) {
       }
     }
     if (compositions.size) {
+      const compositionReports = await loadReportSummaries(relays, [...compositions.values()].map((item) => item.event.id));
+      const compositionRatings = new Map();
+      const ratingEvents = (await nostrPool.querySync(relays, { kinds: [1985], "#e": [...compositions.values()].map((item) => item.event.id), limit: 500 })).filter((rating) => verifyEvent(rating));
+      for (const rating of ratingEvents) {
+        const label = rating.tags.find((tag) => tag[0] === "l" && tag[2] === "hypotaxis.adapter.rating");
+        const target = rating.tags.find((tag) => tag[0] === "e")?.[1];
+        const value = Number(label?.[1]?.split("/")[0]);
+        if (!target || !Number.isInteger(value) || value < 1 || value > 5) continue;
+        const key = `${target}:${rating.pubkey}`;
+        if (!compositionRatings.has(key) || compositionRatings.get(key).created_at < rating.created_at) compositionRatings.set(key, { target, value, created_at: rating.created_at });
+      }
+      const compositionAggregates = new Map();
+      for (const item of compositionRatings.values()) {
+        const aggregate = compositionAggregates.get(item.target) || { total: 0, count: 0 };
+        aggregate.total += item.value;
+        aggregate.count += 1;
+        compositionAggregates.set(item.target, aggregate);
+      }
       results.appendChild(el("<div class='section-title'>Community Compositions</div>"));
       for (const { event, composition } of compositions.values()) {
         const componentReleases = composition.components.map((component) => releasesByComponent.get(`${component.name}@${component.version}`));
@@ -519,8 +605,14 @@ async function discoverAdapters(event) {
           const distribution = release?.manifest.distribution || {};
           return (Array.isArray(distribution.blossom) && distribution.blossom.length) || distribution.torrent?.magnet;
         });
-        const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.components.length} component(s)</div><div class="meta">${composition.community_merge ? "Community merge" : "Composition"} · ${Array.isArray(composition.evaluations) ? composition.evaluations.length : 0} evaluation record(s)</div><div class="meta">Creator: ${escapeHtml(event.pubkey.slice(0, 16))}... · Event: ${escapeHtml(event.id.slice(0, 16))}...</div>${installable ? `<button class="btn secondary install-composition" type="button">Install Components</button>` : ""}<div class="status-line composition-install-status"></div></div>`);
+        const aggregate = compositionAggregates.get(event.id) || { total: 0, count: 0 };
+        const ratingSummary = aggregate.count ? `${(aggregate.total / aggregate.count).toFixed(1)}/5 (${aggregate.count})` : "none yet";
+        const reports = compositionReports.get(event.id);
+        const reportSummary = reports ? `Community reports: ${reports.count} (${[...reports.reasons.entries()].map(([reason, count]) => `${escapeHtml(reason)} ${count}`).join(" · ")})` : "";
+        const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.components.length} component(s)</div><div class="meta">${composition.community_merge ? "Community merge" : "Composition"} · ${Array.isArray(composition.evaluations) ? composition.evaluations.length : 0} evaluation record(s)</div><div class="meta">Community rating: ${ratingSummary}</div>${reportSummary ? `<div class="meta">${reportSummary}</div>` : ""}<div class="meta">Creator: ${escapeHtml(event.pubkey.slice(0, 16))}... · Event: ${escapeHtml(event.id.slice(0, 16))}...</div>${installable ? `<button class="btn secondary install-composition" type="button">Install Components</button>` : ""}<button class="btn secondary report-composition" type="button">Report</button><button class="btn secondary rate-composition" type="button">Rate</button><div class="status-line composition-install-status"></div></div>`);
         if (installable) card.querySelector(".install-composition").addEventListener("click", () => installRemoteComposition(composition, event, componentReleases, card));
+        card.querySelector(".report-composition").addEventListener("click", () => reportArtifact(event, 30079, card.querySelector(".report-composition")));
+        card.querySelector(".rate-composition").addEventListener("click", () => rateArtifact(event, 30079, card.querySelector(".rate-composition")));
         results.appendChild(card);
       }
     }
@@ -554,6 +646,10 @@ async function installRemoteComposition(composition, compositionEvent, releases,
 }
 
 async function reportRelease(release, button) {
+  return reportArtifact(release.event, 30078, button);
+}
+
+async function reportArtifact(artifactEvent, artifactKind, button) {
   const reason = prompt("Report label (for example: license.mismatch or malware)", "license.mismatch");
   if (!reason) return;
   if (!window.nostr || typeof window.nostr.signEvent !== "function") {
@@ -566,7 +662,7 @@ async function reportRelease(release, button) {
     const signed = await window.nostr.signEvent({
       kind: 1985,
       created_at: Math.floor(Date.now() / 1000),
-      tags: [["L", "hypotaxis.adapter.report"], ["l", reason, "hypotaxis.adapter.report"], ["e", release.event_id], ["k", "30078"]],
+      tags: [["L", "hypotaxis.adapter.report"], ["l", reason, "hypotaxis.adapter.report"], ["e", artifactEvent.id], ["k", String(artifactKind)]],
       content: details,
     });
     if (!verifyEvent(signed)) throw new Error("signer returned an invalid event");
@@ -579,6 +675,10 @@ async function reportRelease(release, button) {
 }
 
 async function rateRelease(release, button) {
+  return rateArtifact(release.event, 30078, button);
+}
+
+async function rateArtifact(artifactEvent, artifactKind, button) {
   const rawRating = prompt("Rating from 1 to 5", "5");
   const rating = Number(rawRating);
   if (!Number.isInteger(rating) || rating < 1 || rating > 5) return;
@@ -592,7 +692,7 @@ async function rateRelease(release, button) {
     const signed = await window.nostr.signEvent({
       kind: 1985,
       created_at: Math.floor(Date.now() / 1000),
-      tags: [["L", "hypotaxis.adapter.rating"], ["l", `${rating}/5`, "hypotaxis.adapter.rating"], ["e", release.event_id], ["k", "30078"]],
+      tags: [["L", "hypotaxis.adapter.rating"], ["l", `${rating}/5`, "hypotaxis.adapter.rating"], ["e", artifactEvent.id], ["k", String(artifactKind)]],
       content: details,
     });
     if (!verifyEvent(signed)) throw new Error("signer returned an invalid event");

@@ -272,19 +272,33 @@ def build_release_revocation_event(
 ) -> dict[str, Any]:
     """Build a NIP-09 deletion request for a Hypotaxis release event."""
 
-    validate_signed_event(release_event)
-    if release_event["kind"] != NOSTR_RELEASE_KIND:
-        raise ValueError("release_event is not a Hypotaxis adapter release")
+    return build_artifact_revocation_event(release_event, pubkey, created_at, reason=reason)
+
+
+def build_artifact_revocation_event(
+    artifact_event: dict[str, Any],
+    pubkey: str,
+    created_at: int,
+    *,
+    reason: str = "",
+) -> dict[str, Any]:
+    """Build a NIP-09 deletion request for a release or composition event."""
+
+    validate_signed_event(artifact_event)
+    if artifact_event["kind"] not in (NOSTR_RELEASE_KIND, NOSTR_COMPOSITION_KIND):
+        raise ValueError("artifact_event is not a Hypotaxis release or composition")
     _hex(pubkey, 64, "pubkey")
-    if pubkey != release_event["pubkey"]:
-        raise ValueError("only the release author can revoke the release")
+    if pubkey != artifact_event["pubkey"]:
+        if artifact_event["kind"] == NOSTR_RELEASE_KIND:
+            raise ValueError("only the release author can revoke the release")
+        raise ValueError("only the composition author can revoke the composition")
     if not isinstance(created_at, int) or created_at < 0:
         raise ValueError("created_at must be a non-negative integer")
     event = {
         "pubkey": pubkey,
         "created_at": created_at,
         "kind": NOSTR_DELETION_KIND,
-        "tags": [["e", release_event["id"]], ["k", str(NOSTR_RELEASE_KIND)]],
+        "tags": [["e", artifact_event["id"]], ["k", str(artifact_event["kind"])]],
         "content": reason,
     }
     event["id"] = nostr_event_id(event)
@@ -320,7 +334,20 @@ def build_release_report_event(
 ) -> dict[str, Any]:
     """Build a NIP-32 label event reporting a release concern."""
 
-    validate_signed_event(release_event)
+    return build_artifact_report_event(release_event, pubkey, created_at, report, details=details)
+
+
+def build_artifact_report_event(
+    artifact_event: dict[str, Any],
+    pubkey: str,
+    created_at: int,
+    report: str,
+    *,
+    details: str = "",
+) -> dict[str, Any]:
+    """Build a NIP-32 label event reporting a release or composition concern."""
+
+    validate_signed_event(artifact_event)
     _hex(pubkey, 64, "pubkey")
     if not isinstance(report, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._:-]{1,63}", report):
         raise ValueError("report must be a lowercase label")
@@ -330,7 +357,7 @@ def build_release_report_event(
         "pubkey": pubkey,
         "created_at": created_at,
         "kind": NOSTR_LABEL_KIND,
-        "tags": [["L", "hypotaxis.adapter.report"], ["l", report, "hypotaxis.adapter.report"], ["e", release_event["id"]], ["k", str(NOSTR_RELEASE_KIND)]],
+        "tags": [["L", "hypotaxis.adapter.report"], ["l", report, "hypotaxis.adapter.report"], ["e", artifact_event["id"]], ["k", str(artifact_event["kind"])]],
         "content": details,
     }
     event["id"] = nostr_event_id(event)
@@ -347,7 +374,20 @@ def build_release_rating_event(
 ) -> dict[str, Any]:
     """Build a NIP-32 label event for a 1–5 community release rating."""
 
-    validate_signed_event(release_event)
+    return build_artifact_rating_event(release_event, pubkey, created_at, rating, details=details)
+
+
+def build_artifact_rating_event(
+    artifact_event: dict[str, Any],
+    pubkey: str,
+    created_at: int,
+    rating: int,
+    *,
+    details: str = "",
+) -> dict[str, Any]:
+    """Build a NIP-32 label event for a 1–5 release or composition rating."""
+
+    validate_signed_event(artifact_event)
     _hex(pubkey, 64, "pubkey")
     if not isinstance(rating, int) or isinstance(rating, bool) or not 1 <= rating <= 5:
         raise ValueError("rating must be an integer from 1 to 5")
@@ -357,7 +397,7 @@ def build_release_rating_event(
         "pubkey": pubkey,
         "created_at": created_at,
         "kind": NOSTR_LABEL_KIND,
-        "tags": [["L", "hypotaxis.adapter.rating"], ["l", f"{rating}/5", "hypotaxis.adapter.rating"], ["e", release_event["id"]], ["k", str(NOSTR_RELEASE_KIND)]],
+        "tags": [["L", "hypotaxis.adapter.rating"], ["l", f"{rating}/5", "hypotaxis.adapter.rating"], ["e", artifact_event["id"]], ["k", str(artifact_event["kind"])]],
         "content": details,
     }
     event["id"] = nostr_event_id(event)

@@ -17,9 +17,12 @@ from manga_pipeline.adapter_distribution import (
     build_manifest,
     build_composition,
     build_composition_event,
+    build_artifact_revocation_event,
     build_release_event,
     build_release_report_event,
+    build_artifact_report_event,
     build_release_rating_event,
+    build_artifact_rating_event,
     build_release_revocation_event,
     compatible_manifests,
     distribution_sources,
@@ -98,6 +101,16 @@ def test_release_revocation_uses_nip09_and_requires_release_author():
         build_release_revocation_event(release, "4" * 64, 124)
 
 
+def test_composition_revocation_uses_generic_artifact_builder():
+    composition = build_composition("combined", "1.0.0", "base", [{"name": "style", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}])
+    event = build_composition_event(composition, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    revocation = build_artifact_revocation_event(event, "1" * 64, 124, reason="withdrawn")
+    assert revocation["tags"] == [["e", event["id"]], ["k", "30079"]]
+    revocation["sig"] = "3" * 128
+    assert release_is_revoked(event, [revocation]) is True
+
+
 def test_release_report_uses_nip32_label_event():
     release = build_release_event(_manifest(), "1" * 64, 123)
     release["sig"] = "2" * 128
@@ -105,6 +118,14 @@ def test_release_report_uses_nip32_label_event():
     assert report["kind"] == NOSTR_LABEL_KIND
     assert report["tags"][0] == ["L", "hypotaxis.adapter.report"]
     assert report["tags"][1] == ["l", "license.mismatch", "hypotaxis.adapter.report"]
+
+
+def test_composition_report_targets_composition_kind():
+    composition = build_composition("combined", "1.0.0", "base", [{"name": "style", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}])
+    event = build_composition_event(composition, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    report = build_artifact_report_event(event, "2" * 64, 124, "misleading")
+    assert report["tags"][-1] == ["k", "30079"]
 
 
 def test_release_rating_uses_constrained_nip32_label_event():
@@ -116,6 +137,14 @@ def test_release_rating_uses_constrained_nip32_label_event():
     assert rating["tags"][1] == ["l", "4/5", "hypotaxis.adapter.rating"]
     with pytest.raises(ValueError, match="1 to 5"):
         build_release_rating_event(release, "2" * 64, 124, 6)
+
+
+def test_composition_rating_targets_composition_kind():
+    composition = build_composition("combined", "1.0.0", "base", [{"name": "style", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}])
+    event = build_composition_event(composition, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    rating = build_artifact_rating_event(event, "2" * 64, 124, 4)
+    assert rating["tags"][-1] == ["k", "30079"]
 
 
 def test_signed_event_rejects_id_tampering():

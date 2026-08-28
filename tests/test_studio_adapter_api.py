@@ -162,6 +162,21 @@ def test_discover_adapters_returns_verified_compositions(monkeypatch):
     assert result["compositions"][0]["composition"]["name"] == "community"
 
 
+def test_discover_adapters_filters_invalid_composition_signatures(monkeypatch):
+    from manga_pipeline.adapter_distribution import build_composition, build_composition_event
+
+    composition = build_composition("community", "1.0.0", "base", [{"name": "style", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}])
+    event = build_composition_event(composition, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: True)
+    monkeypatch.setattr(studio_app, "verify_schnorr_signature", lambda _event: False)
+    monkeypatch.setattr(studio_app, "query_nostr_relays", lambda _relays, filters, max_events: [event] if filters[0]["kinds"] == [30079] else [])
+
+    result = studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+
+    assert result["compositions"] == []
+
+
 def test_discover_adapters_hides_revoked_compositions(monkeypatch):
     from manga_pipeline.adapter_distribution import build_composition, build_composition_event, nostr_event_id
 
