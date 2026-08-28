@@ -129,6 +129,37 @@ prompt on exactly the panels it's tagged on, the same trick already used for cha
 appearance notes. This also means a location and a prop can appear in the same panel without
 conflict, since text-anchoring doesn't compete for an IP-Adapter slot.
 
+## Extracting cast sheets from long novels with a large LLM
+
+The three profile mechanisms above (character/location/prop) exist specifically to sidestep
+automatic-detection weak points: spaCy's NER has blind spots for names outside its training
+distribution (notably under-recognizing some non-Western names - see "Project status" below),
+there's no coreference resolution across a long span, and locations/props have no automatic
+detection at all. Those gaps compound with length - a short story might only ever mention a
+character by one name, but a full novel will use a name, a nickname, a title, and a bare
+pronoun across hundreds of pages, and NER alone won't reliably tie those back to one canonical
+person the way `_merge_person_aliases` needs to.
+
+A large LLM (whatever you have access to - Claude, GPT-4-class, etc.) is a good fit for
+producing these profile files as a one-time **offline authoring step**, before the novel ever
+reaches hypotaxis - not as a runtime dependency of the pipeline itself. Have it read the whole
+manuscript and write out `character_profiles.txt`/`location_profiles.txt`/`prop_profiles.txt`
+in the plain `Name: description` format `stories/*.example.txt` shows, resolving name variants
+to one canonical form per character (the form spaCy is most likely to catch, or whichever you
+prefer - `_merge_person_aliases` still handles minor variants found in-text, but starting from
+a clean canonical list removes most of the burden), tagging any bodiless/non-physical entity
+with `[no-form]`, and noting settings/objects that recur often enough to be worth a profile
+rather than just prose description. This is squarely a "read a lot of text, extract a
+structured list" task a large model is well suited for, and doing it once per novel is a small,
+bounded cost regardless of model size or where it runs.
+
+What this deliberately isn't: a large LLM rewriting or simplifying the manuscript's prose
+before it reaches Stage A. Stage A's caption model (bridge LLM or the trained captioner) is
+tuned against real prose text, not a pre-summarized version of it, and rewriting would risk
+introducing a second layer of hallucination on top of whatever the summarization step gets
+wrong - the cast-sheet extraction above targets exactly the gap that's actually there (canonical
+identity across a long span) rather than changing what the rest of the pipeline reads.
+
 ## Character LoRA (experimental, opt-in)
 
 IP-Adapter identity conditioning (above) is a lightweight, always-available fallback, but it's
