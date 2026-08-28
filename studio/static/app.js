@@ -84,6 +84,13 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
+function base64Url(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let binary = "";
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 // ---------- Dataset Curation ----------
 
 async function showDatasetCuration() {
@@ -399,8 +406,11 @@ async function loadLocalAdapters(holder) {
         <div class="meta">${escapeHtml(adapter.bundle_dir)}</div>
         <div class="meta torrent-state">BitTorrent: ${adapter.torrent_exists ? `ready (${escapeHtml(adapter.torrent_path)})` : adapter.torrent_available ? "not created" : "libtorrent unavailable"}</div>
         ${adapter.torrent_available && !adapter.torrent_exists ? `<button class="btn secondary create-torrent" type="button">Create Torrent</button>` : ""}
+        <button class="btn secondary upload-blossom" type="button">Upload to Blossom</button>
         <button class="btn secondary publish-adapter" type="button">Publish to Nostr</button>
+        <button class="btn secondary remove-adapter" type="button">Remove</button>
         <div class="status-line torrent-status"></div>
+        <div class="status-line blossom-status"></div>
         <div class="status-line publish-status"></div>
       </div>
       `));
@@ -410,10 +420,78 @@ async function loadLocalAdapters(holder) {
       }
       const publishButton = grid.lastElementChild.querySelector(".publish-adapter");
       publishButton.addEventListener("click", () => publishAdapter(adapter, publishButton));
+      const blossomButton = grid.lastElementChild.querySelector(".upload-blossom");
+      blossomButton.addEventListener("click", () => uploadAdapterToBlossom(adapter, blossomButton));
+      const removeButton = grid.lastElementChild.querySelector(".remove-adapter");
+      removeButton.addEventListener("click", () => removeLocalAdapter(adapter, removeButton, holder));
     }
     holder.appendChild(grid);
   } catch (e) {
     holder.innerHTML = `<div class="section-title">Local Adapter Registry</div><p class="status-line error">Could not load local bundles: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function removeLocalAdapter(adapter, button, holder) {
+  if (!confirm(`Remove ${adapter.name} ${adapter.version}? This deletes the local bundle and torrent metadata.`)) return;
+  button.disabled = true;
+  const status = button.closest(".card").querySelector(".blossom-status");
+  try {
+    await api(`/api/adapters/${encodeURIComponent(adapter.name)}/${encodeURIComponent(adapter.version)}`, { method: "DELETE" });
+    await loadLocalAdapters(holder);
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
+    button.disabled = false;
+  }
+}
+
+async function uploadAdapterToBlossom(adapter, button) {
+  const card = button.closest(".card");
+  const status = card.querySelector(".blossom-status");
+  const serverText = prompt("Blossom server URLs (comma-separated)", "https://blossom.example");
+  if (!serverText) return;
+  const serverUrls = serverText.split(",").map((value) => value.trim()).filter(Boolean);
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Checking Blossom servers...";
+  try {
+    const health = await api("/api/adapters/blossom/health", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ server_urls: serverUrls }),
+    });
+    const healthy = health.servers.filter((server) => server.healthy).map((server) => server.server);
+    if (!healthy.length) throw new Error("no Blossom servers are reachable");
+    let authorizations = null;
+    let commonAuthorization = null;
+    if (window.nostr && typeof window.nostr.signEvent === "function") {
+      authorizations = {};
+      for (const file of adapter.manifest.files) {
+        const event = await window.nostr.signEvent({
+          kind: 24242,
+          created_at: Math.floor(Date.now() / 1000),
+          tags: [["t", "upload"], ["expiration", String(Math.floor(Date.now() / 1000) + 900)], ["x", file.sha256]],
+          content: "Upload Hypotaxis adapter blob",
+        });
+        authorizations[file.sha256] = `Nostr ${base64Url(event)}`;
+      }
+    } else {
+      commonAuthorization = prompt("Optional BUD-11 Authorization header (Nostr ...)", "") || null;
+      status.textContent = "Uploading with the supplied authorization...";
+    }
+    status.textContent = `Uploading to ${healthy.length} server(s)...`;
+    const result = await api("/api/adapters/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: adapter.name, version: adapter.version, server_urls: healthy, authorization: commonAuthorization, authorizations }),
+    });
+    const failed = result.servers._failures?.length || 0;
+    status.textContent = `Uploaded to ${healthy.length - failed} server(s)${failed ? `; ${failed} failed` : ""}.`;
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
+  } finally {
+    button.disabled = false;
   }
 }
 

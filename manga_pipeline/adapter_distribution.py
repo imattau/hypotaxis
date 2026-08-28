@@ -16,6 +16,7 @@ import re
 import shutil
 import tempfile
 import time
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
@@ -708,6 +709,7 @@ def upload_bundle_to_servers(
     server_urls: Iterable[str],
     *,
     authorization: str | None = None,
+    authorizations: dict[str, str] | None = None,
     opener=urllib.request.urlopen,
 ) -> dict[str, list[dict[str, Any]]]:
     """Publish every verified bundle file to multiple Blossom servers.
@@ -723,6 +725,9 @@ def upload_bundle_to_servers(
     servers = list(dict.fromkeys(server_urls))
     if not servers:
         raise ValueError("at least one Blossom server is required")
+    if authorization is not None and authorizations is not None:
+        raise ValueError("provide either authorization or authorizations, not both")
+    authorizations = authorizations or {}
     results: dict[str, list[dict[str, Any]]] = {}
     failures: dict[str, str] = {}
     for server in servers:
@@ -730,7 +735,8 @@ def upload_bundle_to_servers(
         try:
             for entry in manifest["files"]:
                 content_type = "application/octet-stream"
-                descriptors.append(upload_blob(server, bundle_root / entry["path"], content_type=content_type, authorization=authorization, opener=opener))
+                file_authorization = authorizations.get(entry["sha256"], authorization)
+                descriptors.append(upload_blob(server, bundle_root / entry["path"], content_type=content_type, authorization=file_authorization, opener=opener))
             results[server] = descriptors
         except (OSError, RuntimeError, ValueError) as exc:
             failures[server] = str(exc)
@@ -739,6 +745,45 @@ def upload_bundle_to_servers(
     if not results or all(key == "_failures" for key in results):
         raise RuntimeError("all Blossom bundle uploads failed: " + "; ".join(f"{server}: {error}" for server, error in failures.items()))
     return results
+
+
+def check_blossom_server(
+    server_url: str,
+    *,
+    timeout: int = 10,
+    opener=urllib.request.urlopen,
+) -> dict[str, Any]:
+    """Probe a Blossom server origin and normalize its HTTP health result."""
+
+    parsed = urlparse(server_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("Blossom server URL must be an HTTP(S) origin/path without query or fragment")
+    if not isinstance(timeout, int) or timeout <= 0:
+        raise ValueError("timeout must be positive")
+    request = urllib.request.Request(server_url.rstrip("/") + "/", method="HEAD")
+    try:
+        with opener(request, timeout=timeout) as response:
+            status_value = getattr(response, "status", None)
+            status = int(status_value if status_value is not None else response.getcode())
+            return {"server": server_url.rstrip("/"), "healthy": 200 <= status < 500, "status": status}
+    except urllib.error.HTTPError as exc:
+        return {"server": server_url.rstrip("/"), "healthy": 400 <= exc.code < 500, "status": exc.code, "error": str(exc.reason)}
+    except (OSError, TimeoutError) as exc:
+        return {"server": server_url.rstrip("/"), "healthy": False, "status": None, "error": str(exc)}
+
+
+def check_blossom_servers(
+    server_urls: Iterable[str],
+    *,
+    timeout: int = 10,
+    opener=urllib.request.urlopen,
+) -> list[dict[str, Any]]:
+    """Probe unique Blossom servers while preserving configured order."""
+
+    servers = list(dict.fromkeys(server_urls))
+    if not servers:
+        raise ValueError("at least one Blossom server is required")
+    return [check_blossom_server(server, timeout=timeout, opener=opener) for server in servers]
 
 
 def install_from_blossom(

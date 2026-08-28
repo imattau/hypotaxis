@@ -8,6 +8,7 @@ from manga_pipeline.adapter_distribution import (
     NOSTR_RELEASE_KIND,
     available_sources,
     blossom_authorization_header,
+    check_blossom_servers,
     blossom_blob_urls,
     blossom_servers,
     build_manifest,
@@ -267,6 +268,46 @@ def test_upload_bundle_to_servers_verifies_and_reports_mirror_results(tmp_path, 
     assert "https://good.example" in result
     assert result["_failures"][0]["server"] == "https://bad.example"
     assert calls == [("https://good.example", "adapter_model.safetensors"), ("https://bad.example", "adapter_model.safetensors")]
+
+
+def test_upload_bundle_to_servers_selects_authorization_by_file_hash(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "adapter_model.safetensors").write_bytes(b"weights")
+    manifest = build_manifest(source, name="grounding", version="1.0.0", base_model="base", license="MIT")
+    bundle = tmp_path / "bundle"
+    write_bundle(source, bundle, manifest)
+    seen = []
+
+    def fake_upload(server, path, **kwargs):
+        seen.append(kwargs["authorization"])
+        return {"sha256": manifest["files"][0]["sha256"]}
+
+    monkeypatch.setattr("manga_pipeline.adapter_distribution.upload_blob", fake_upload)
+    digest = manifest["files"][0]["sha256"]
+    upload_bundle_to_servers(manifest, bundle, ["https://server.example"], authorizations={digest: "Nostr scoped"})
+    assert seen == ["Nostr scoped"]
+
+
+def test_check_blossom_servers_deduplicates_and_reports_http_health():
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    requests = []
+
+    def opener(request, timeout):
+        requests.append((request.full_url, timeout))
+        return Response()
+
+    result = check_blossom_servers(["https://one.example/", "https://one.example/"], timeout=4, opener=opener)
+    assert result == [{"server": "https://one.example", "healthy": True, "status": 200}]
+    assert requests == [("https://one.example/", 4)]
 
 
 class _FakeResponse:

@@ -23,6 +23,7 @@ from manga_pipeline.captioner import Captioner  # noqa: E402
 from manga_pipeline.adapter_distribution import (  # noqa: E402
     build_manifest,
     build_composition,
+    check_blossom_servers,
     compatible_manifests,
     build_release_event,
     create_torrent,
@@ -218,12 +219,18 @@ class UploadAdapterRequest(BaseModel):
     version: str = Field(max_length=50)
     server_urls: list[str] = Field(min_length=1, max_length=20)
     authorization: str | None = Field(None, max_length=20000)
+    authorizations: dict[str, str] | None = None
 
 
 class MirrorBlobRequest(BaseModel):
     server_url: str = Field(max_length=500)
     source_url: str = Field(max_length=2000)
     authorization: str | None = Field(None, max_length=20000)
+
+
+class BlossomHealthRequest(BaseModel):
+    server_urls: list[str] = Field(min_length=1, max_length=20)
+    timeout: int = Field(10, ge=1, le=60)
 
 
 class DownloadTorrentRequest(BaseModel):
@@ -340,6 +347,7 @@ def upload_adapter(req: UploadAdapterRequest):
             bundle,
             req.server_urls,
             authorization=req.authorization,
+            authorizations=req.authorizations,
         )
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -359,6 +367,16 @@ def mirror_adapter_blob(req: MirrorBlobRequest):
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"mirrored": True, "descriptor": descriptor}
+
+
+@app.post("/api/adapters/blossom/health")
+def check_adapter_blossom_health(req: BlossomHealthRequest):
+    """Check configured Blossom mirrors before publishing or downloading."""
+
+    try:
+        return {"servers": check_blossom_servers(req.server_urls, timeout=req.timeout)}
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 def _run_torrent_download_job(job_id: str, magnet: str, manifest: dict, destination: Path) -> None:
@@ -534,6 +552,20 @@ def list_local_adapters():
         except (OSError, ValueError, json.JSONDecodeError):
             continue
     return {"adapters": adapters}
+
+
+@app.delete("/api/adapters/{name}/{version}")
+def remove_local_adapter(name: str, version: str):
+    """Remove one validated local adapter bundle and its adjacent torrent."""
+
+    bundle = _adapter_bundle(name, version)
+    try:
+        shutil.rmtree(bundle)
+        torrent = bundle.parent / f"{bundle.name}.torrent"
+        torrent.unlink(missing_ok=True)
+    except OSError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"removed": True, "name": name, "version": version}
 
 
 class AdaptRequest(BaseModel):

@@ -68,6 +68,20 @@ def test_list_local_adapters_returns_only_valid_manifests(tmp_path, monkeypatch)
     assert result["adapters"][0]["torrent_exists"] is False
 
 
+def test_remove_local_adapter_deletes_bundle_and_torrent(tmp_path, monkeypatch):
+    monkeypatch.setattr(studio_app, "ROOT", tmp_path)
+    monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    bundle = tmp_path / "models" / "shared_adapters" / "grounding-1.0.0"
+    bundle.mkdir(parents=True)
+    (bundle / "manifest.json").write_text("{}", encoding="utf-8")
+    torrent = bundle.parent / "grounding-1.0.0.torrent"
+    torrent.write_bytes(b"torrent")
+    result = studio_app.remove_local_adapter("grounding", "1.0.0")
+    assert result == {"removed": True, "name": "grounding", "version": "1.0.0"}
+    assert not bundle.exists()
+    assert not torrent.exists()
+
+
 def test_create_adapter_torrent_endpoint_reports_created(tmp_path, monkeypatch):
     monkeypatch.setattr(studio_app, "ROOT", tmp_path)
     monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
@@ -136,7 +150,7 @@ def test_upload_adapter_endpoint_verifies_bundle_and_uploads_each_file(tmp_path,
     monkeypatch.setattr(
         studio_app,
         "upload_bundle_to_servers",
-        lambda manifest, bundle, servers, authorization: calls.append((manifest, bundle, servers, authorization))
+        lambda manifest, bundle, servers, authorization, authorizations: calls.append((manifest, bundle, servers, authorization, authorizations))
         or {servers[0]: [{"sha256": manifest["files"][0]["sha256"], "url": "https://cdn.example/blob"}]},
     )
     result = studio_app.upload_adapter(
@@ -146,7 +160,7 @@ def test_upload_adapter_endpoint_verifies_bundle_and_uploads_each_file(tmp_path,
     )
     assert result["uploaded"] is True
     assert result["manifest_sha256"]
-    assert calls[0][2:] == (["https://blossom.example"], "Nostr token")
+    assert calls[0][2:] == (["https://blossom.example"], "Nostr token", None)
 
 
 def test_mirror_adapter_blob_endpoint_returns_descriptor(monkeypatch):
@@ -164,6 +178,18 @@ def test_mirror_adapter_blob_endpoint_returns_descriptor(monkeypatch):
     )
     assert result["mirrored"] is True
     assert result["descriptor"]["sha256"] == "a" * 64
+
+
+def test_check_adapter_blossom_health_endpoint(monkeypatch):
+    monkeypatch.setattr(
+        studio_app,
+        "check_blossom_servers",
+        lambda servers, timeout: [{"server": servers[0], "healthy": True, "status": 200}],
+    )
+    result = studio_app.check_adapter_blossom_health(
+        studio_app.BlossomHealthRequest(server_urls=["https://blossom.example"], timeout=3)
+    )
+    assert result["servers"][0]["healthy"] is True
 
 
 def test_start_torrent_download_returns_job_id(monkeypatch, tmp_path):

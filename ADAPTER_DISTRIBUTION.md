@@ -47,6 +47,9 @@ already signed kind-24242 event or a `Nostr ...` header from the browser signer.
 `upload_bundle_to_servers` verifies the complete bundle before attempting all
 configured servers, deduplicates the list, and returns successful descriptors
 alongside per-server failures so a temporary mirror outage is recoverable.
+`check_blossom_servers` provides a lightweight HEAD probe for configured mirror
+origins; Studio exposes it at `POST /api/adapters/blossom/health` for UI and
+future source-selection logic.
 
 The Studio browser now uses bundled `nostr-tools` for discovery. Its
 `SimplePool` queries multiple relays and `verifyEvent` validates NIP-01 event
