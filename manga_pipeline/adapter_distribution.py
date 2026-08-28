@@ -27,6 +27,8 @@ from .adapter_manifest import canonical_json, load_manifest, manifest_bytes, sha
 
 NOSTR_RELEASE_KIND = 30078
 BLOSSOM_SERVER_LIST_KIND = 10063
+NOSTR_DELETION_KIND = 5
+NOSTR_LABEL_KIND = 1985
 COMPOSITION_SCHEMA = "hypotaxis.adapter-composition.v1"
 
 
@@ -149,6 +151,80 @@ def parse_release_event(event: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("release event content must contain a manifest object")
     validate_manifest(manifest)
     return manifest
+
+
+def build_release_revocation_event(
+    release_event: dict[str, Any],
+    pubkey: str,
+    created_at: int,
+    *,
+    reason: str = "",
+) -> dict[str, Any]:
+    """Build a NIP-09 deletion request for a Hypotaxis release event."""
+
+    validate_signed_event(release_event)
+    if release_event["kind"] != NOSTR_RELEASE_KIND:
+        raise ValueError("release_event is not a Hypotaxis adapter release")
+    _hex(pubkey, 64, "pubkey")
+    if pubkey != release_event["pubkey"]:
+        raise ValueError("only the release author can revoke the release")
+    if not isinstance(created_at, int) or created_at < 0:
+        raise ValueError("created_at must be a non-negative integer")
+    event = {
+        "pubkey": pubkey,
+        "created_at": created_at,
+        "kind": NOSTR_DELETION_KIND,
+        "tags": [["e", release_event["id"]], ["k", str(NOSTR_RELEASE_KIND)]],
+        "content": reason,
+    }
+    event["id"] = nostr_event_id(event)
+    return event
+
+
+def release_is_revoked(release_event: dict[str, Any], deletion_events: Iterable[dict[str, Any]]) -> bool:
+    """Return whether a same-author NIP-09 event revokes this release."""
+
+    validate_signed_event(release_event)
+    for deletion in deletion_events:
+        try:
+            validate_signed_event(deletion)
+        except ValueError:
+            continue
+        if deletion["kind"] != NOSTR_DELETION_KIND or deletion["pubkey"] != release_event["pubkey"]:
+            continue
+        if any(isinstance(tag, list) and len(tag) >= 2 and tag[0] == "e" and tag[1] == release_event["id"] for tag in deletion["tags"]):
+            return True
+        address = f"{NOSTR_RELEASE_KIND}:{release_event['pubkey']}:adapter:"
+        if any(isinstance(tag, list) and len(tag) >= 2 and isinstance(tag[1], str) and tag[0] == "a" and tag[1].startswith(address) for tag in deletion["tags"]):
+            return True
+    return False
+
+
+def build_release_report_event(
+    release_event: dict[str, Any],
+    pubkey: str,
+    created_at: int,
+    report: str,
+    *,
+    details: str = "",
+) -> dict[str, Any]:
+    """Build a NIP-32 label event reporting a release concern."""
+
+    validate_signed_event(release_event)
+    _hex(pubkey, 64, "pubkey")
+    if not isinstance(report, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._:-]{1,63}", report):
+        raise ValueError("report must be a lowercase label")
+    if not isinstance(created_at, int) or created_at < 0:
+        raise ValueError("created_at must be a non-negative integer")
+    event = {
+        "pubkey": pubkey,
+        "created_at": created_at,
+        "kind": NOSTR_LABEL_KIND,
+        "tags": [["L", "hypotaxis.adapter.report"], ["l", report, "hypotaxis.adapter.report"], ["e", release_event["id"]], ["k", str(NOSTR_RELEASE_KIND)]],
+        "content": details,
+    }
+    event["id"] = nostr_event_id(event)
+    return event
 
 
 def _load_websocket():
@@ -427,6 +503,7 @@ def build_manifest(
     files: Iterable[str] | None = None,
     distribution: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
+    training: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a manifest from explicitly selected files in an adapter directory."""
 
@@ -457,6 +534,8 @@ def build_manifest(
         manifest["distribution"] = distribution
     if metadata:
         manifest["metadata"] = metadata
+    if training:
+        manifest["training"] = training
     validate_manifest(manifest)
     return manifest
 

@@ -284,7 +284,7 @@ async function discoverAdapters(event) {
   results.innerHTML = "";
   try {
     const events = await nostrPool.querySync(relays, { kinds: [30078], limit: 20 });
-    const releases = events
+    let releases = events
       .filter((release) => verifyEvent(release))
       .map((release) => {
         try {
@@ -296,6 +296,11 @@ async function discoverAdapters(event) {
         }
       })
       .filter(Boolean);
+    if (releases.length) {
+      const deletionEvents = (await nostrPool.querySync(relays, { kinds: [5], "#e": releases.map((release) => release.event_id), limit: 100 }))
+        .filter((deletion) => verifyEvent(deletion));
+      releases = releases.filter((release) => !deletionEvents.some((deletion) => deletion.pubkey === release.creator_pubkey && deletion.tags.some((tag) => tag[0] === "e" && tag[1] === release.event_id)));
+    }
     status.textContent = `${releases.length} verified release(s) found.`;
     if (releases.length === 0) {
       results.innerHTML = "<p class='empty-state'>No Hypotaxis releases found.</p>";
@@ -312,6 +317,7 @@ async function discoverAdapters(event) {
           <div class="meta">Event: ${escapeHtml(release.event_id.slice(0, 16))}...</div>
           ${Array.isArray(manifest.distribution?.blossom) && manifest.distribution.blossom.length ? `<button class="btn secondary install-adapter" type="button">Install from Blossom</button>` : ""}
           ${manifest.distribution?.torrent?.magnet ? `<button class="btn secondary torrent-download" type="button">Download via BitTorrent</button>` : ""}
+          <button class="btn secondary report-release" type="button">Report</button>
           <div class="status-line install-status"></div>
         </div>
       `);
@@ -319,12 +325,38 @@ async function discoverAdapters(event) {
       if (installButton) installButton.addEventListener("click", () => installAdapter(release, installButton));
       const torrentButton = card.querySelector(".torrent-download");
       if (torrentButton) torrentButton.addEventListener("click", () => downloadAdapterTorrent(release, torrentButton));
+      card.querySelector(".report-release").addEventListener("click", () => reportRelease(release, card.querySelector(".report-release")));
       results.appendChild(card);
     }
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
   } finally {
+    button.disabled = false;
+  }
+}
+
+async function reportRelease(release, button) {
+  const reason = prompt("Report label (for example: license.mismatch or malware)", "license.mismatch");
+  if (!reason) return;
+  if (!window.nostr || typeof window.nostr.signEvent !== "function") {
+    alert("A NIP-07 browser signer is required to submit reports.");
+    return;
+  }
+  const details = prompt("Optional report details", "") || "";
+  button.disabled = true;
+  try {
+    const signed = await window.nostr.signEvent({
+      kind: 1985,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [["L", "hypotaxis.adapter.report"], ["l", reason, "hypotaxis.adapter.report"], ["e", release.event_id], ["k", "30078"]],
+      content: details,
+    });
+    if (!verifyEvent(signed)) throw new Error("signer returned an invalid event");
+    await Promise.any(nostrPool.publish(document.getElementById("adapter-relays").value.split("\n").map((line) => line.trim()).filter(Boolean), signed));
+    button.textContent = "Reported";
+  } catch (e) {
+    button.textContent = "Report failed";
     button.disabled = false;
   }
 }

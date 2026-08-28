@@ -5,6 +5,8 @@ import pytest
 
 from manga_pipeline.adapter_distribution import (
     BLOSSOM_SERVER_LIST_KIND,
+    NOSTR_DELETION_KIND,
+    NOSTR_LABEL_KIND,
     NOSTR_RELEASE_KIND,
     available_sources,
     blossom_authorization_header,
@@ -14,6 +16,8 @@ from manga_pipeline.adapter_distribution import (
     build_manifest,
     build_composition,
     build_release_event,
+    build_release_report_event,
+    build_release_revocation_event,
     compatible_manifests,
     distribution_sources,
     download_verified_blob,
@@ -31,6 +35,7 @@ from manga_pipeline.adapter_distribution import (
     nostr_event_id,
     parse_release_event,
     query_nostr_relays,
+    release_is_revoked,
     resolve_composition_paths,
     schnorr_available,
     verify_schnorr_signature,
@@ -75,6 +80,26 @@ def test_signed_release_event_round_trips_after_signature_is_attached():
     event["sig"] = "2" * 128
     validate_signed_event(event)
     assert parse_release_event(event)["name"] == "grounded-captioner"
+
+
+def test_release_revocation_uses_nip09_and_requires_release_author():
+    release = build_release_event(_manifest(), "1" * 64, 123)
+    release["sig"] = "2" * 128
+    revocation = build_release_revocation_event(release, "1" * 64, 124, reason="bad training data")
+    assert revocation["kind"] == NOSTR_DELETION_KIND
+    revocation["sig"] = "3" * 128
+    assert release_is_revoked(release, [revocation]) is True
+    with pytest.raises(ValueError, match="release author"):
+        build_release_revocation_event(release, "4" * 64, 124)
+
+
+def test_release_report_uses_nip32_label_event():
+    release = build_release_event(_manifest(), "1" * 64, 123)
+    release["sig"] = "2" * 128
+    report = build_release_report_event(release, "2" * 64, 124, "license.mismatch", details="license is unclear")
+    assert report["kind"] == NOSTR_LABEL_KIND
+    assert report["tags"][0] == ["L", "hypotaxis.adapter.report"]
+    assert report["tags"][1] == ["l", "license.mismatch", "hypotaxis.adapter.report"]
 
 
 def test_signed_event_rejects_id_tampering():

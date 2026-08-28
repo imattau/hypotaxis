@@ -197,6 +197,7 @@ class PackageAdapterRequest(BaseModel):
     magnet: str | None = Field(None, max_length=2000)
     nostr_pubkey: str | None = Field(None, max_length=64)
     created_at: int | None = None
+    training: dict | None = None
 
 
 class CreateTorrentRequest(BaseModel):
@@ -287,6 +288,7 @@ def package_adapter(req: PackageAdapterRequest):
             license=req.license,
             files=req.files or None,
             distribution=distribution or None,
+            training=req.training,
         )
         manifest_path = write_bundle(source, output, manifest)
         event = None

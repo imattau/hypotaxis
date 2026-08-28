@@ -39,6 +39,23 @@ def _require_sha256(value: Any, field: str) -> None:
         raise ValueError(f"{field} must be a lowercase SHA-256 hex digest")
 
 
+def validate_training_metadata(training: Any) -> None:
+    """Validate optional reproducibility metadata for a trained adapter."""
+
+    if not isinstance(training, dict):
+        raise ValueError("training metadata must be an object")
+    if "method" in training and (not isinstance(training["method"], str) or not training["method"].strip()):
+        raise ValueError("training.method must be a non-empty string")
+    if "rank" in training and (not isinstance(training["rank"], int) or isinstance(training["rank"], bool) or training["rank"] <= 0):
+        raise ValueError("training.rank must be a positive integer")
+    if "dataset" in training and (not isinstance(training["dataset"], str) or not training["dataset"].strip()):
+        raise ValueError("training.dataset must be a non-empty string")
+    if "dataset_sha256" in training:
+        _require_sha256(training["dataset_sha256"], "training.dataset_sha256")
+    if "examples" in training and (not isinstance(training["examples"], int) or isinstance(training["examples"], bool) or training["examples"] < 0):
+        raise ValueError("training.examples must be a non-negative integer")
+
+
 def validate_manifest(manifest: dict[str, Any]) -> None:
     """Validate the interoperable, security-relevant manifest fields."""
 
@@ -67,6 +84,8 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     blossom = distribution.get("blossom")
     if blossom is not None and not isinstance(blossom, list):
         raise ValueError("distribution.blossom must be a list")
+    if "training" in manifest:
+        validate_training_metadata(manifest["training"])
 
 
 def load_manifest(path: str | Path) -> dict[str, Any]:

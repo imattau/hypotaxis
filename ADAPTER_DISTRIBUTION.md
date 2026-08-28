@@ -100,6 +100,16 @@ Studio exposes `POST /api/adapters/composition` to create these manifests from
 local bundles. It refuses mismatched base models and retains each source
 manifest digest so a composition can be audited or reversed later.
 
+Adapter manifests may also include a `training` object with reproducibility
+fields such as `method`, `rank`, `dataset`, `dataset_sha256`, and `examples`.
+These fields are optional for backward compatibility but are validated when
+present and are accepted by the Studio packaging API.
+
+Release trust helpers also support NIP-09 revocation requests and NIP-32
+report labels. Revocations require the release author's pubkey and clients can
+use `release_is_revoked` to hide matching releases; report labels preserve a
+separate moderation trail without modifying the release manifest.
+
 To prepare a local release bundle:
 
 ```bash
