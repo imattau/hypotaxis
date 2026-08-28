@@ -118,7 +118,7 @@ def run(
             for panel_index, (panel, (_, _, w, h)) in enumerate(zip(page.panels, boxes))
         ]
         composed = compose_page(page.layout, panel_images, size)
-        final = render_bubbles(composed, page, size)
+        final = render_bubbles(composed, page, size, panel_images=panel_images)
         final.save(page_path)
         page_images.append(final)
 

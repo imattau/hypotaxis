@@ -308,6 +308,44 @@ same fixed order, while staying fully deterministic (the same story always pagin
 way) - a 15-panel story that used to come out as five uniform 3-panel pages now varies
 (`[3, 4, 2, 3, 3]` in one real run).
 
+## Speech bubbles: SVG templates with face-anchored tails
+
+Dialogue bubbles used to be plain PIL primitives (`rounded_rectangle`, `ellipse`) pinned to a
+fixed offset from each panel's own top-left corner - no speech tail pointing at whoever's
+talking, no thought-bubble trail, and every bubble in the same fixed corner regardless of where
+the speaking character actually ended up in the generated art. `manga_pipeline/bubbles.py` now
+renders bubbles as SVG templates (`cairosvg`) - a proper rounded-rect body with a triangular
+tail for speech, an ellipse with a shrinking circle trail for thought, a plain box for
+narration - composited onto the page, with the bubble's text still drawn via PIL on top (kept
+separate deliberately: PIL's `wrap_to_width`/`textbbox` measurements are what the bubble's own
+size is computed from, so keeping text rendering unchanged avoids any font-metric mismatch
+between two renderers).
+
+The tail points at an actual detected face, not a guess: `manga_pipeline/face_detect.py` reuses
+the same OpenPose body detector already validated for pose-ControlNet headcount verification
+(`controlnet_aux`'s `OpenposeDetector`) to find each panel's speaking character's face,
+anchoring on the nose keypoint (the 18-point body format has no separate mouth/lip landmark, and
+nose is close enough for "point the tail at this character" without a second facial-landmark
+model). Real testing on actual generated panels found it precisely accurate whenever it detects
+a face at all - every detected point landed right on a real face across multiple real test
+images - but with the same recall gap already documented for the pose-ControlNet verification
+use of this detector: it's trained on photos, not manga/anime line art, and missed several
+real, clearly visible faces in one real test image. A panel where nothing is detected (or a
+dialogue line with no anchor to cycle to) still renders correctly - just as a tail-less bubble
+at its previous default position, exactly the old behavior, rather than guessing a direction
+that might point at nothing. There's also no attempt to match a specific dialogue line's
+speaker to a specific detected face - multiple anchors in one panel are just cycled through in
+left-to-right order, the same "no real per-character identity match from pixels alone"
+limitation already true of pose-ControlNet's multi-figure panels.
+
+A fourth bubble style beyond the three `DialogueLine.kind`s (speech/thought/narration): a jagged
+burst shape for shouted/exclaimed speech, `_shout_outline_points` in `bubbles.py` - a
+deterministic zigzag polygon (alternating outer/inner radius around an ellipse), not hand-drawn
+art. Nothing upstream currently tags dialogue with an intensity signal, so this is decided by a
+cheap heuristic on the line's own text (`_is_shouted`): a trailing `!`, or the line being
+substantially uppercase. Only ever applies to `speech`-kind lines - thought and narration keep
+their own fixed shape regardless of text content.
+
 ## Per-panel generation vs. a shared page image
 
 Each panel is generated independently (`DiffusersBackend.generate_panel`), sized to its own

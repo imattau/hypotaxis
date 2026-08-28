@@ -1,18 +1,43 @@
 from __future__ import annotations
 
+import io
+import math
+
 from PIL import Image, ImageDraw
 
 from .fonts import load_font, wrap_to_width
 from .layouts import boxes_for
 from .schema import DialogueLine, Page
 
-
 _GAP = 4
 _MIN_FONT_SIZE = 8
+_TAIL_LENGTH = 36
+_TAIL_BASE_HALF_WIDTH = 10
+_THOUGHT_TRAIL_STEPS = 3
+_SHOUT_SPIKES = 14
+_SHOUT_JITTER = 0.22
 
 
 def _bubble_text(line: DialogueLine) -> str:
     return f"{line.speaker}: {line.text}" if line.kind == "narration" else line.text
+
+
+def _is_shouted(text: str) -> bool:
+    """Cheap heuristic for whether a speech line reads as shouted/exclaimed
+    - nothing upstream currently tags dialogue with an intensity signal
+    (Stage A's dialogue extraction doesn't distinguish shouted from calm
+    speech), so this looks at the line's own punctuation/casing instead: a
+    trailing "!" (the standard prose convention for shouted/exclaimed
+    dialogue), or the line being substantially uppercase (some prose writes
+    shouted dialogue in caps instead of, or alongside, the exclamation
+    point). Only meaningful for speech lines - thought/narration don't get
+    a shout-styled bubble regardless, see _draw_bubble.
+    """
+    stripped = text.strip()
+    if stripped.endswith("!"):
+        return True
+    letters = [c for c in stripped if c.isalpha()]
+    return len(letters) >= 4 and sum(1 for c in letters if c.isupper()) / len(letters) >= 0.8
 
 
 def _wrapped_height(draw: ImageDraw.ImageDraw, wrapped: str, font, pad: int) -> int:
@@ -20,13 +45,164 @@ def _wrapped_height(draw: ImageDraw.ImageDraw, wrapped: str, font, pad: int) -> 
     return (bbox[3] - bbox[1]) + 2 * pad
 
 
-def _draw_bubble(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], line: DialogueLine, font) -> int:
-    """Draws the bubble and returns its actual rendered height, so the
-    caller can advance its cursor by the real amount instead of a fixed
-    guess - a fixed guess is what let long-wrapped bubbles overlap the next
-    one (or run past the panel entirely) on dialogue-dense panels."""
+def _tail_geometry(
+    box: tuple[float, float, float, float], anchor: tuple[float, float]
+) -> tuple[tuple[float, float], tuple[float, float], tuple[float, float]] | None:
+    """Where a speech/thought bubble's tail attaches to its own body and
+    points toward `anchor` (the speaking character's detected face - see
+    face_detect.py). Picks whichever edge (left/right/top/bottom) the
+    anchor is most in the direction of, rather than exact rounded-rect/
+    vector-intersection math - simpler, and visually indistinguishable for
+    a small tail. Returns None if the anchor is inside the bubble itself
+    (nothing sensible to point at)."""
+    bx0, by0, bx1, by1 = box
+    cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
+    ax, ay = anchor
+    if bx0 <= ax <= bx1 and by0 <= ay <= by1:
+        return None
+    dx, dy = ax - cx, ay - cy
+
+    if abs(dx) >= abs(dy):
+        edge_x = bx0 if dx < 0 else bx1
+        t = max(0.15, min(0.85, (ay - by0) / max(1.0, by1 - by0)))
+        attach_y = by0 + t * (by1 - by0)
+        base1 = (edge_x, attach_y - _TAIL_BASE_HALF_WIDTH)
+        base2 = (edge_x, attach_y + _TAIL_BASE_HALF_WIDTH)
+        tip_x = edge_x + (_TAIL_LENGTH if dx > 0 else -_TAIL_LENGTH)
+        tip = (tip_x, attach_y + max(-1.0, min(1.0, dy / max(1.0, abs(dx)))) * (_TAIL_LENGTH * 0.3))
+    else:
+        edge_y = by0 if dy < 0 else by1
+        t = max(0.15, min(0.85, (ax - bx0) / max(1.0, bx1 - bx0)))
+        attach_x = bx0 + t * (bx1 - bx0)
+        base1 = (attach_x - _TAIL_BASE_HALF_WIDTH, edge_y)
+        base2 = (attach_x + _TAIL_BASE_HALF_WIDTH, edge_y)
+        tip_y = edge_y + (_TAIL_LENGTH if dy > 0 else -_TAIL_LENGTH)
+        tip = (attach_x + max(-1.0, min(1.0, dx / max(1.0, abs(dy)))) * (_TAIL_LENGTH * 0.3), tip_y)
+    return base1, base2, tip
+
+
+def _thought_trail(box: tuple[float, float, float, float], anchor: tuple[float, float]) -> list[tuple[float, float, float]]:
+    """A shrinking chain of circles from the thought bubble toward
+    `anchor`, the classic manga "thought trail" - (x, y, radius) triples."""
+    bx0, by0, bx1, by1 = box
+    cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
+    ax, ay = anchor
+    dx, dy = ax - cx, ay - cy
+    dist = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / dist, dy / dist
+    # start just outside the bubble's edge in the anchor's direction
+    edge_dist = min(bx1 - bx0, by1 - by0) / 2
+    start_x, start_y = cx + ux * edge_dist, cy + uy * edge_dist
+    trail = []
+    for step in range(1, _THOUGHT_TRAIL_STEPS + 1):
+        radius = max(2.0, 8.0 - step * 2.0)
+        px = start_x + ux * step * (_TAIL_LENGTH / _THOUGHT_TRAIL_STEPS)
+        py = start_y + uy * step * (_TAIL_LENGTH / _THOUGHT_TRAIL_STEPS)
+        trail.append((px, py, radius))
+    return trail
+
+
+def _render_svg(width: int, height: int, body: str) -> Image.Image:
+    import cairosvg
+
+    svg = f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">{body}</svg>'
+    png_bytes = cairosvg.svg2png(bytestring=svg.encode("utf-8"))
+    return Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+
+
+def _speech_bubble_image(w: int, h: int, tail, margin: int) -> tuple[Image.Image, int, int]:
+    """Renders a rounded-rect speech bubble (optionally with a tail
+    triangle) to its own RGBA image, padded by `margin` on every side so a
+    tail extending past the bubble box isn't clipped. Returns (image,
+    origin_x, origin_y) - the offset to paste this image at, in the same
+    coordinate space `box`/`tail` were given in."""
+    canvas_w, canvas_h = w + 2 * margin, h + 2 * margin
+    body = ""
+    if tail is not None:
+        # tail drawn first, rounded rect on top - the rect's own fill+stroke
+        # naturally covers the part of the tail that overlaps it, leaving
+        # just the exposed outline outside the rect, no separate seam
+        # patch needed
+        base1, base2, tip = tail
+        pts = " ".join(f"{x + margin},{y + margin}" for x, y in (base1, tip, base2))
+        body += f'<polygon points="{pts}" fill="white" stroke="black" stroke-width="3"/>'
+    body += f'<rect x="{margin}" y="{margin}" width="{w}" height="{h}" rx="14" fill="white" stroke="black" stroke-width="3"/>'
+    return _render_svg(canvas_w, canvas_h, body), -margin, -margin
+
+
+def _shout_outline_points(w: float, h: float) -> list[tuple[float, float]]:
+    """Deterministic jagged burst outline (alternating outer/inner radius
+    around an ellipse) for a shouted/exclaimed speech line - see
+    _is_shouted. Sized generously larger than the tight text box (1.3x,
+    not just inscribed at w/2, h/2) so the inward-dipping valleys don't
+    cut into the text even at the shape's tightest points."""
+    cx, cy = w / 2, h / 2
+    rx, ry = (w / 2) * 1.3, (h / 2) * 1.3
+    points = []
+    for i in range(_SHOUT_SPIKES * 2):
+        angle = (i / (_SHOUT_SPIKES * 2)) * 2 * math.pi
+        scale = 1.0 if i % 2 == 0 else (1.0 - _SHOUT_JITTER)
+        points.append((cx + math.cos(angle) * rx * scale, cy + math.sin(angle) * ry * scale))
+    return points
+
+
+def _shout_bubble_image(w: int, h: int, tail, margin: int) -> tuple[Image.Image, int, int]:
+    """Jagged burst-shaped speech bubble for shouted/exclaimed dialogue
+    (see _is_shouted) - same tail mechanism as the normal speech bubble,
+    just a spikier body instead of a smooth rounded rect. The burst
+    deliberately extends past the tight text box (see
+    _shout_outline_points), so the canvas margin here is widened to match
+    whatever that actually needs, not just the fixed tail-only margin every
+    other bubble style uses - a caller-supplied margin too small for the
+    burst's own spikes would silently clip them.
+    """
+    burst_margin = max(margin, int(0.3 * max(w, h) / 2) + 8)
+    canvas_w, canvas_h = w + 2 * burst_margin, h + 2 * burst_margin
+    body = ""
+    if tail is not None:
+        base1, base2, tip = tail
+        pts = " ".join(f"{x + burst_margin},{y + burst_margin}" for x, y in (base1, tip, base2))
+        body += f'<polygon points="{pts}" fill="white" stroke="black" stroke-width="3"/>'
+    outline = _shout_outline_points(w, h)
+    pts_str = " ".join(f"{x + burst_margin},{y + burst_margin}" for x, y in outline)
+    body += f'<polygon points="{pts_str}" fill="white" stroke="black" stroke-width="3"/>'
+    return _render_svg(canvas_w, canvas_h, body), -burst_margin, -burst_margin
+
+
+def _thought_bubble_image(w: int, h: int, trail, margin: int) -> tuple[Image.Image, int, int]:
+    canvas_w, canvas_h = w + 2 * margin, h + 2 * margin
+    body = f'<ellipse cx="{margin + w / 2}" cy="{margin + h / 2}" rx="{w / 2}" ry="{h / 2}" fill="white" stroke="black" stroke-width="3"/>'
+    for x, y, r in trail or []:
+        body += f'<circle cx="{x + margin}" cy="{y + margin}" r="{r}" fill="white" stroke="black" stroke-width="2"/>'
+    return _render_svg(canvas_w, canvas_h, body), -margin, -margin
+
+
+def _narration_box_image(w: int, h: int, margin: int) -> tuple[Image.Image, int, int]:
+    canvas_w, canvas_h = w + 2 * margin, h + 2 * margin
+    body = f'<rect x="{margin}" y="{margin}" width="{w}" height="{h}" fill="#fffcc8" stroke="black" stroke-width="3"/>'
+    return _render_svg(canvas_w, canvas_h, body), -margin, -margin
+
+
+def _draw_bubble(
+    page_img: Image.Image, draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], line: DialogueLine, font, anchor
+) -> int:
+    """Draws the bubble (SVG-rendered shape, composited onto page_img, plus
+    PIL-drawn text on top - text stays PIL so wrap_to_width's sizing, which
+    this function's own layout math depends on, stays exactly what actually
+    gets rendered) and returns its rendered height, so the caller can
+    advance its cursor by the real amount instead of a fixed guess.
+
+    anchor: an (x, y) page-pixel point (the speaking character's detected
+    face - see face_detect.py) to point the bubble's tail toward, or None
+    if nothing was detected for this panel - a bubble with no anchor is
+    drawn with no tail at all rather than guessing a direction, since a
+    guessed tail pointing at nothing would be worse than no tail.
+    """
     x0, y0, x1, y1 = box
-    pad = 8
+    is_shout = line.kind == "speech" and _is_shouted(line.text)
+    # the shout burst's inward-dipping valleys (see _shout_outline_points)
+    # need more clearance from the text than a smooth rounded rect does
+    pad = 14 if is_shout else 8
     text = _bubble_text(line)
     wrapped = wrap_to_width(draw, text, font, (x1 - x0) - 2 * pad)
     bbox = draw.multiline_textbbox((0, 0), wrapped, font=font)
@@ -37,13 +213,26 @@ def _draw_bubble(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], line
     bx0, by0 = x0 + 4, y0 + 4
     bx1, by1 = bx0 + bubble_w, by0 + bubble_h
 
+    margin = _TAIL_LENGTH + _TAIL_BASE_HALF_WIDTH + 4
     if line.kind == "narration":
-        draw.rectangle((bx0, by0, bx1, by1), fill=(255, 255, 200), outline=(0, 0, 0), width=2)
+        bubble_img, ox, oy = _narration_box_image(bubble_w, bubble_h, margin)
     elif line.kind == "thought":
-        draw.ellipse((bx0, by0, bx1, by1), fill=(255, 255, 255), outline=(0, 0, 0), width=2)
+        trail = _thought_trail((bx0, by0, bx1, by1), anchor) if anchor is not None else None
+        # trail() computed in page-absolute coords, but the bubble image is
+        # rendered in its own local (0,0)-origin space - shift back
+        local_trail = [(x - bx0, y - by0, r) for x, y, r in trail] if trail else None
+        bubble_img, ox, oy = _thought_bubble_image(bubble_w, bubble_h, local_trail, margin)
+    elif is_shout:
+        tail = _tail_geometry((bx0, by0, bx1, by1), anchor) if anchor is not None else None
+        local_tail = [(x - bx0, y - by0) for x, y in tail] if tail else None
+        bubble_img, ox, oy = _shout_bubble_image(bubble_w, bubble_h, local_tail, margin)
     else:
-        draw.rounded_rectangle((bx0, by0, bx1, by1), radius=10, fill=(255, 255, 255), outline=(0, 0, 0), width=2)
+        tail = _tail_geometry((bx0, by0, bx1, by1), anchor) if anchor is not None else None
+        local_tail = [(x - bx0, y - by0) for x, y in tail] if tail else None
+        bubble_img, ox, oy = _speech_bubble_image(bubble_w, bubble_h, local_tail, margin)
 
+    # render_bubbles() already ensures page_img is RGBA before any bubble is drawn
+    page_img.alpha_composite(bubble_img, (int(bx0 + ox), int(by0 + oy)))
     draw.multiline_text((bx0 + pad, by0 + pad), wrapped, fill=(0, 0, 0), font=font)
     return bubble_h + 4
 
@@ -62,24 +251,57 @@ def _font_size_for_panel(draw: ImageDraw.ImageDraw, dialogue: list[DialogueLine]
     return _MIN_FONT_SIZE
 
 
-def render_bubbles(page_img: Image.Image, page: Page, page_size: tuple[int, int]) -> Image.Image:
+def render_bubbles(
+    page_img: Image.Image,
+    page: Page,
+    page_size: tuple[int, int],
+    panel_images: list[Image.Image] | None = None,
+) -> Image.Image:
+    """panel_images: the same list generate_panel() produced for this page
+    (already resized to each panel's own box - see pipeline.run()), used to
+    find a face anchor per panel to point each panel's speech/thought
+    bubble tails at (see face_detect.FaceAnchorDetector). Optional and
+    best-effort: omit it (or a panel where detection finds nothing) and
+    bubbles render exactly as before, tail-less, at the same position.
+    """
+    if page_img.mode != "RGBA":
+        page_img = page_img.convert("RGBA")
     draw = ImageDraw.Draw(page_img)
     base_size = max(12, page_size[1] // 45)
     boxes = boxes_for(page.layout)
 
-    for (x, y, w, h), panel in zip(boxes, page.panels):
+    detector = None
+    if panel_images is not None:
+        from .face_detect import FaceAnchorDetector
+
+        detector = FaceAnchorDetector()
+
+    for panel_index, ((x, y, w, h), panel) in enumerate(zip(boxes, page.panels)):
         box_px = (int(x * page_size[0]), int(y * page_size[1]), int((x + w) * page_size[0]), int((y + h) * page_size[1]))
         panel_w, panel_h = box_px[2] - box_px[0], box_px[3] - box_px[1]
         if not panel.dialogue:
             continue
 
+        anchors: list[tuple[float, float]] = []
+        if detector is not None and panel_index < len(panel_images):
+            local_anchors = detector.find_anchors(panel_images[panel_index])
+            anchors = [(box_px[0] + ax, box_px[1] + ay) for ax, ay in local_anchors]
+
         font = load_font(_font_size_for_panel(draw, panel.dialogue, panel_w, panel_h, base_size))
 
         cursor_y = box_px[1]
-        for line in panel.dialogue:
+        for line_index, line in enumerate(panel.dialogue):
             if box_px[3] - cursor_y < _MIN_FONT_SIZE + 8:
                 break  # no usable room left in this panel even at the minimum font size
             local_box = (box_px[0], cursor_y, box_px[2], box_px[3])
-            cursor_y += _draw_bubble(draw, local_box, line, font)
+            # no reliable way to match a dialogue line's speaker to a
+            # specific detected face from pixels alone (same open problem
+            # as pose-ControlNet's multi-figure identity assignment) - cycle
+            # through whatever anchors this panel has, in left-to-right order
+            anchor = anchors[line_index % len(anchors)] if anchors else None
+            cursor_y += _draw_bubble(page_img, draw, local_box, line, font, anchor)
 
-    return page_img
+    # composited bubbles are fully opaque everywhere they cover, and the
+    # page underneath started opaque too - safe (and needed for PDF export,
+    # which doesn't handle RGBA cleanly) to flatten back to RGB
+    return page_img.convert("RGB")
