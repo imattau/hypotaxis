@@ -1318,6 +1318,10 @@ function renderGeneratePanel(storyId) {
           <input type="number" id="g-char-lora-scale" value="0.8" min="0" max="2" step="0.05" />
         </div>
         <div>
+          <label>Adapter composition</label>
+          <select id="g-composition"><option value="">none</option></select>
+        </div>
+        <div>
           <label>Pose ControlNet</label>
           <select id="g-pose-controlnet">
             <option value="false">off</option>
@@ -1351,7 +1355,22 @@ function renderGeneratePanel(storyId) {
     </div>
   `);
   wrap.querySelector("#g-submit").addEventListener("click", () => startGeneration(storyId));
+  loadGenerationCompositions(wrap.querySelector("#g-composition"));
   return wrap;
+}
+
+async function loadGenerationCompositions(select) {
+  try {
+    const { compositions } = await api("/api/adapters/compositions");
+    for (const composition of compositions) {
+      const option = document.createElement("option");
+      option.value = composition.path;
+      option.textContent = `${composition.name} ${composition.version} (${composition.component_count} adapters)`;
+      select.appendChild(option);
+    }
+  } catch (_) {
+    // Composition selection is optional; generation remains usable if the registry is unavailable.
+  }
 }
 
 async function startGeneration(storyId) {
@@ -1361,6 +1380,7 @@ async function startGeneration(storyId) {
   const identity_adapter_scale = parseFloat(document.getElementById("g-scale").value);
   const use_character_lora = document.getElementById("g-char-lora").value === "true";
   const character_lora_scale = parseFloat(document.getElementById("g-char-lora-scale").value);
+  const adapter_composition_path = document.getElementById("g-composition").value;
   const use_pose_controlnet = document.getElementById("g-pose-controlnet").value === "true";
   const pose_controlnet_scale = parseFloat(document.getElementById("g-pose-controlnet-scale").value);
   const force = document.getElementById("g-force").checked;
@@ -1382,6 +1402,7 @@ async function startGeneration(storyId) {
         identity_adapter_scale,
         use_character_lora,
         character_lora_scale,
+        adapter_composition_path,
         use_pose_controlnet,
         pose_controlnet_scale,
         force,

@@ -28,6 +28,7 @@ from manga_pipeline.adapter_distribution import (
     upload_blob,
     upload_bundle_to_servers,
     TorrentUnavailableError,
+    TorrentSeeder,
     create_torrent,
     download_torrent,
     torrent_available,
@@ -650,3 +651,44 @@ def test_torrent_status_normalizes_transfer_metrics():
         "state": "seeding",
         "seeding": True,
     }
+
+
+def test_torrent_seeder_keeps_opt_in_handle_and_reports_status(tmp_path):
+    class Handle:
+        def status(self):
+            class Status:
+                progress = 1.0
+                num_peers = 2
+                download_rate = 0
+                upload_rate = 64
+                state = "seeding"
+
+            return Status()
+
+    class Session:
+        def __init__(self):
+            self.added = []
+            self.removed = []
+
+        def add_torrent(self, params):
+            self.added.append(params)
+            return Handle()
+
+        def remove_torrent(self, handle):
+            self.removed.append(handle)
+
+    class FakeLibtorrent:
+        session = Session
+
+        @staticmethod
+        def add_magnet_uri(session, magnet, params):
+            return session.add_torrent(params)
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    seeder = TorrentSeeder(libtorrent_module=FakeLibtorrent())
+    result = seeder.start("grounding-1.0.0", bundle, magnet="magnet:?xt=urn:btih:abc")
+    assert result["seed_id"] == "grounding-1.0.0"
+    assert result["seeding"] is True
+    seeder.stop("grounding-1.0.0")
+    assert len(seeder._session.removed) == 1

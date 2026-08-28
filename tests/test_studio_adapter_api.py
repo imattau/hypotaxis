@@ -293,3 +293,14 @@ def test_list_adapter_compositions_returns_only_valid_manifests(tmp_path, monkey
     assert result["compositions"] == [
         {"name": "combined", "version": "1.0.0", "base_model": "base", "component_count": 1, "path": "models/shared_adapters/compositions/combined-1.0.0.json"}
     ]
+
+
+def test_generate_rejects_composition_outside_registry(tmp_path, monkeypatch):
+    monkeypatch.setattr(studio_app, "ROOT", tmp_path)
+    monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    monkeypatch.setattr(studio_app, "_story_or_404", lambda story_id: object())
+    with pytest.raises(studio_app.HTTPException, match="inside the project"):
+        studio_app.generate(
+            "story",
+            studio_app.GenerateRequest(adapter_composition_path=str(tmp_path / "outside.json")),
+        )

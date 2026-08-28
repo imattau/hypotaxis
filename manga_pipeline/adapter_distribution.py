@@ -36,6 +36,46 @@ class TorrentUnavailableError(RuntimeError):
     """Raised when the optional libtorrent dependency is not installed."""
 
 
+class TorrentSeeder:
+    """Opt-in libtorrent session that keeps completed bundles seeding."""
+
+    def __init__(self, *, libtorrent_module=None):
+        self._libtorrent = libtorrent_module or _load_libtorrent()
+        self._session = self._libtorrent.session()
+        self._handles: dict[str, Any] = {}
+
+    def start(self, seed_id: str, bundle_dir: str | Path, *, torrent_path: str | Path | None = None, magnet: str | None = None) -> dict[str, Any]:
+        if not isinstance(seed_id, str) or not seed_id:
+            raise ValueError("seed_id must be non-empty")
+        if seed_id in self._handles:
+            raise ValueError(f"already seeding: {seed_id}")
+        bundle_dir = Path(bundle_dir).resolve()
+        if not bundle_dir.is_dir():
+            raise NotADirectoryError(bundle_dir)
+        if torrent_path is None and magnet is None:
+            raise ValueError("torrent_path or magnet is required")
+        if torrent_path is not None:
+            handle = self._session.add_torrent({"ti": self._libtorrent.torrent_info(str(Path(torrent_path).resolve())), "save_path": str(bundle_dir.parent)})
+        else:
+            handle = self._libtorrent.add_magnet_uri(self._session, magnet, {"save_path": str(bundle_dir.parent)})
+        self._handles[seed_id] = handle
+        return self.status(seed_id)
+
+    def status(self, seed_id: str) -> dict[str, Any]:
+        handle = self._handles.get(seed_id)
+        if handle is None:
+            raise KeyError(seed_id)
+        return _torrent_status(handle.status(), seeding=True) | {"seed_id": seed_id}
+
+    def stop(self, seed_id: str) -> None:
+        handle = self._handles.pop(seed_id)
+        self._session.remove_torrent(handle)
+
+    def close(self) -> None:
+        for seed_id in list(self._handles):
+            self.stop(seed_id)
+
+
 class NostrUnavailableError(RuntimeError):
     """Raised when the optional Nostr WebSocket dependency is not installed."""
 

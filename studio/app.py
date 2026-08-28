@@ -1026,6 +1026,13 @@ def _run_generation_job(job_id: str, story: Story, cfg: PipelineConfig, force: b
 def generate(story_id: str, req: GenerateRequest):
     story = _story_or_404(story_id)
 
+    composition_path = ""
+    if req.adapter_composition_path:
+        composition = _path_under(req.adapter_composition_path, MODELS_DIR / "shared_adapters" / "compositions")
+        if not composition.is_file():
+            raise HTTPException(404, "adapter composition not found")
+        composition_path = str(composition)
+
     if not _try_claim_gpu():
         raise HTTPException(409, "another job (adapt or generate) is already running - only one at a time on this GPU")
 
@@ -1039,7 +1046,7 @@ def generate(story_id: str, req: GenerateRequest):
         identity_adapter_scale=req.identity_adapter_scale,
         use_character_lora=req.use_character_lora,
         character_lora_scale=req.character_lora_scale,
-        adapter_composition_path=req.adapter_composition_path,
+        adapter_composition_path=composition_path,
         use_pose_controlnet=req.use_pose_controlnet,
         pose_controlnet_scale=req.pose_controlnet_scale,
         output_dir=str(OUTPUT_DIR),
