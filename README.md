@@ -338,6 +338,20 @@ speaker to a specific detected face - multiple anchors in one panel are just cyc
 left-to-right order, the same "no real per-character identity match from pixels alone"
 limitation already true of pose-ControlNet's multi-figure panels.
 
+Two more real bugs found from actually looking at a generated page rather than a unit test,
+both fixed in `_draw_bubble`: first, a bubble's *tail* pointed at the right face, but the
+bubble's own *body* still always started at a fixed `x0 + 4` regardless - the anchor was
+changing the tail's direction while the bubble itself stayed pinned to the panel's top-left
+corner, undercutting the point of anchoring it at all. `_bubble_x0` now hovers the bubble
+horizontally near its anchor (clamped to stay inside the panel) when one's available. Second,
+`wrap_to_width` was being given almost the entire panel width as its wrap limit, so a line only
+wrapped once it was nearly panel-wide - most dialogue rendered as one long single-line bubble
+stretching across most of the panel instead of a compact, multi-line one.
+`_bubble_max_width` caps speech/thought bubbles to a natural reading width (about 62% of the
+panel, with a sensible floor for narrow panels) instead of the full panel - narration keeps the
+old full-width behavior deliberately, since a caption box conventionally spans the panel the
+way a bubble attached to one character shouldn't.
+
 A fourth bubble style beyond the three `DialogueLine.kind`s (speech/thought/narration): a jagged
 burst shape for shouted/exclaimed speech, `_shout_outline_points` in `bubbles.py` - a
 deterministic zigzag polygon (alternating outer/inner radius around an ellipse), not hand-drawn

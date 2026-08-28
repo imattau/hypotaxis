@@ -9,7 +9,10 @@ from __future__ import annotations
 from PIL import Image, ImageDraw
 
 from manga_pipeline.bubbles import (
+    _MIN_BUBBLE_WIDTH,
     _MIN_FONT_SIZE,
+    _bubble_max_width,
+    _bubble_x0,
     _draw_bubble,
     _font_size_for_panel,
     _is_shouted,
@@ -185,3 +188,85 @@ def test_draw_bubble_keeps_normal_style_for_calm_speech():
     line = DialogueLine(speaker="Aiko", text="Hi there.", kind="speech")
     height = _draw_bubble(img, draw, (0, 0, 200, 600), line, load_font(16), None)
     assert height > 0
+
+
+# ---------- bubble positioning: hovering near the speaker, not the panel corner ----------
+
+
+def test_bubble_x0_hugs_left_edge_when_no_anchor():
+    # the original fallback behavior, unchanged when nothing was detected
+    assert _bubble_x0(0.0, 400.0, 100.0, None) == 4.0
+
+
+def test_bubble_x0_centers_on_anchor_when_available():
+    x0 = _bubble_x0(0.0, 400.0, 100.0, (300.0, 50.0))
+    # bubble (width 100) centered on x=300 would span 250-350, well clear
+    # of both panel edges here, so it should land exactly there
+    assert x0 == 250.0
+
+
+def test_bubble_x0_clamps_to_panel_bounds_for_an_edge_anchor():
+    # an anchor right at the panel's right edge must not push the bubble
+    # off-panel
+    x0 = _bubble_x0(0.0, 400.0, 100.0, (395.0, 50.0))
+    assert x0 <= 400.0 - 100.0 - 4.0
+    assert x0 >= 0.0 + 4.0
+
+
+def test_draw_bubble_moves_toward_a_right_side_anchor():
+    line = DialogueLine(speaker="Aiko", text="Hi.", kind="speech")
+    img_no_anchor, draw_no_anchor = _page_and_draw()
+    _draw_bubble(img_no_anchor, draw_no_anchor, (0, 0, 400, 600), line, load_font(16), None)
+
+    img_anchor, draw_anchor = _page_and_draw()
+    _draw_bubble(img_anchor, draw_anchor, (0, 0, 400, 600), line, load_font(16), (380.0, 300.0))
+
+    # a real regression check, not just "doesn't crash": the anchored
+    # version's ink should extend further right than the un-anchored one
+    def rightmost_ink_x(img):
+        px = img.load()
+        w, h = img.size
+        for x in range(w - 1, -1, -1):
+            for y in range(h):
+                if px[x, y][:3] != (255, 255, 255):  # non-background (white) pixel
+                    return x
+        return 0
+
+    assert rightmost_ink_x(img_anchor) > rightmost_ink_x(img_no_anchor)
+
+
+# ---------- bubble width: wraps to a natural reading width, not the full panel ----------
+
+
+def test_bubble_max_width_for_speech_is_narrower_than_the_panel():
+    max_w = _bubble_max_width(600.0, "speech")
+    assert max_w < 600.0
+    assert max_w >= _MIN_BUBBLE_WIDTH
+
+
+def test_bubble_max_width_for_narration_spans_the_full_panel():
+    assert _bubble_max_width(600.0, "narration") == 600.0
+
+
+def test_bubble_max_width_respects_a_minimum_for_narrow_panels():
+    # a very narrow panel shouldn't force absurdly tight text wrapping
+    assert _bubble_max_width(100.0, "speech") == _MIN_BUBBLE_WIDTH
+
+
+def test_draw_bubble_wraps_long_speech_instead_of_spanning_the_panel():
+    # regression: wrap_to_width used to be given almost the entire panel
+    # width, so a moderately long line rendered as one wide single-line
+    # bubble instead of wrapping - a wide panel with a longish line should
+    # now produce a bubble noticeably narrower than the panel itself
+    img, draw = _page_and_draw()
+    line = DialogueLine(speaker="Aiko", text="This is a moderately long line of dialogue text.", kind="speech")
+    _draw_bubble(img, draw, (0, 0, 1000, 600), line, load_font(16), None)
+
+    def ink_bounds_x(img):
+        px = img.load()
+        w, h = img.size
+        xs = [x for x in range(w) for y in range(h) if px[x, y][:3] != (255, 255, 255)]
+        return (min(xs), max(xs)) if xs else (0, 0)
+
+    left, right = ink_bounds_x(img)
+    assert (right - left) < 1000 * 0.75  # nowhere near spanning the full panel

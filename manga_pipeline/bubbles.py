@@ -16,6 +16,8 @@ _TAIL_BASE_HALF_WIDTH = 10
 _THOUGHT_TRAIL_STEPS = 3
 _SHOUT_SPIKES = 14
 _SHOUT_JITTER = 0.22
+_BUBBLE_WIDTH_FRACTION = 0.62
+_MIN_BUBBLE_WIDTH = 140
 
 
 def _bubble_text(line: DialogueLine) -> str:
@@ -43,6 +45,31 @@ def _is_shouted(text: str) -> bool:
 def _wrapped_height(draw: ImageDraw.ImageDraw, wrapped: str, font, pad: int) -> int:
     bbox = draw.multiline_textbbox((0, 0), wrapped, font=font)
     return (bbox[3] - bbox[1]) + 2 * pad
+
+
+def _bubble_max_width(panel_w: float, kind: str) -> float:
+    """Speech/thought bubbles wrap to a natural reading width rather than
+    the full panel - a real page showed the bug this fixes: wrap_to_width
+    used to be given almost the entire panel width as its limit, so a line
+    only wrapped once it was nearly panel-wide, and most dialogue ended up
+    as one long single-line bubble stretching across most of the panel
+    instead of a compact, multi-line one. Narration keeps the full-width
+    behavior deliberately - a caption box conventionally spans the panel,
+    unlike a speech/thought bubble attached to one character."""
+    if kind == "narration":
+        return panel_w
+    return max(_MIN_BUBBLE_WIDTH, min(panel_w, panel_w * _BUBBLE_WIDTH_FRACTION))
+
+
+def _bubble_x0(x0: float, x1: float, bubble_w: float, anchor: tuple[float, float] | None) -> float:
+    """Where a bubble's left edge lands, horizontally: hovering near its
+    speaker (anchor) when one's known, clamped to stay inside the panel -
+    or flush against the panel's left edge (with a small 4px inset) when
+    nothing was detected, the original fallback behavior."""
+    if anchor is None:
+        return x0 + 4
+    ax, _ = anchor
+    return max(x0 + 4, min(x1 - bubble_w - 4, ax - bubble_w / 2))
 
 
 def _tail_geometry(
@@ -199,18 +226,22 @@ def _draw_bubble(
     guessed tail pointing at nothing would be worse than no tail.
     """
     x0, y0, x1, y1 = box
+    panel_w = x1 - x0
     is_shout = line.kind == "speech" and _is_shouted(line.text)
     # the shout burst's inward-dipping valleys (see _shout_outline_points)
     # need more clearance from the text than a smooth rounded rect does
     pad = 14 if is_shout else 8
     text = _bubble_text(line)
-    wrapped = wrap_to_width(draw, text, font, (x1 - x0) - 2 * pad)
+
+    max_bubble_w = _bubble_max_width(panel_w, line.kind)
+    wrapped = wrap_to_width(draw, text, font, max_bubble_w - 2 * pad)
     bbox = draw.multiline_textbbox((0, 0), wrapped, font=font)
     text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
 
-    bubble_w = min(x1 - x0, text_w + 2 * pad)
+    bubble_w = min(max_bubble_w, text_w + 2 * pad)
     bubble_h = text_h + 2 * pad
-    bx0, by0 = x0 + 4, y0 + 4
+    bx0 = _bubble_x0(x0, x1, bubble_w, anchor)
+    by0 = y0 + 4
     bx1, by1 = bx0 + bubble_w, by0 + bubble_h
 
     margin = _TAIL_LENGTH + _TAIL_BASE_HALF_WIDTH + 4
@@ -245,7 +276,10 @@ def _font_size_for_panel(draw: ImageDraw.ImageDraw, dialogue: list[DialogueLine]
     any panel with more than 2-3 lines."""
     for size in range(base_size, _MIN_FONT_SIZE - 1, -1):
         font = load_font(size)
-        total = sum(_wrapped_height(draw, wrap_to_width(draw, _bubble_text(line), font, panel_w - 16), font, 8) + _GAP for line in dialogue)
+        total = sum(
+            _wrapped_height(draw, wrap_to_width(draw, _bubble_text(line), font, _bubble_max_width(panel_w, line.kind) - 16), font, 8) + _GAP
+            for line in dialogue
+        )
         if total <= panel_h or size == _MIN_FONT_SIZE:
             return size
     return _MIN_FONT_SIZE
