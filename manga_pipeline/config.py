@@ -48,3 +48,12 @@ class PipelineConfig:
     registry_dir: str = "registry"
     use_identity_adapter: bool = True
     identity_adapter_scale: float = 0.6
+    # opt-in per-character LoRA (see manga_pipeline/character_lora.py,
+    # train_character_lora.py) - off by default since it requires a
+    # separately trained adapter per character and changes nothing for a
+    # story with none trained yet. Complements identity_adapter rather than
+    # replacing it: IP-Adapter above stays a lightweight always-available
+    # fallback, while a trained LoRA is a stronger, character-specific
+    # identity signal once someone has invested the training time.
+    use_character_lora: bool = False
+    character_lora_scale: float = 0.8

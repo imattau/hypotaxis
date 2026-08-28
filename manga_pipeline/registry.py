@@ -13,6 +13,7 @@ class CharacterEntry:
     description: str = ""
     reference_image: str = ""
     is_abstract: bool = False
+    lora_path: str = ""
 
 
 class CharacterRegistry:
@@ -42,6 +43,16 @@ class CharacterRegistry:
     def set_reference_image(self, name: str, path: str) -> None:
         existing = self._entries.get(name) or CharacterEntry(name=name)
         existing.reference_image = path
+        self._entries[name] = existing
+        self._save()
+
+    def set_lora_path(self, name: str, path: str) -> None:
+        """Records the directory holding a trained per-character LoRA (see
+        manga_pipeline/character_lora.py, train_character_lora.py) -
+        DiffusersBackend.generate_panel() loads and activates it for panels
+        resolving to this character when cfg.use_character_lora is on."""
+        existing = self._entries.get(name) or CharacterEntry(name=name)
+        existing.lora_path = path
         self._entries[name] = existing
         self._save()
 

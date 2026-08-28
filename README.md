@@ -10,7 +10,7 @@ required cloud APIs.
 | Stage | What it does | Key tech |
 |---|---|---|
 | **A — Story Adaptation** | Prose → structured Story JSON script (panels, dialogue, camera hints) | sentence embeddings for scene segmentation, LexRank (networkx) for panel-budget compression, spaCy NER + dependency parsing for characters/speaker attribution, a small local LLM (Qwen2.5-3B-Instruct by default) for panel captions and content-aware camera framing |
-| **B — Character/Location/Prop Identity** | Persistent visual identity for characters and recurring locations; consistent wording for recurring props | characters/locations: text registry + IP-Adapter reference images, two simultaneous slots so a panel can be conditioned on a character and a setting at once. Props: text-anchored into the generation prompt only — image-conditioning a whole panel on a close-up of a small object distorts the rest of the composition |
+| **B — Character/Location/Prop Identity** | Persistent visual identity for characters and recurring locations; consistent wording for recurring props | characters/locations: text registry + IP-Adapter reference images, two simultaneous slots so a panel can be conditioned on a character and a setting at once, plus an optional trained per-character LoRA for a stronger identity lock (see "Character LoRA" below). Props: text-anchored into the generation prompt only — image-conditioning a whole panel on a close-up of a small object distorts the rest of the composition |
 | **C — Generation** | Each panel generated independently at its own aspect ratio, then composed into a page | SDXL / SDXL-Turbo via `diffusers`, text2img per panel |
 | **D — Assembly** | Panels → laid-out page → dialogue bubbles → PDF | Pillow, deterministic, no model |
 
@@ -129,6 +129,56 @@ prompt on exactly the panels it's tagged on, the same trick already used for cha
 appearance notes. This also means a location and a prop can appear in the same panel without
 conflict, since text-anchoring doesn't compete for an IP-Adapter slot.
 
+## Character LoRA (experimental, opt-in)
+
+IP-Adapter identity conditioning (above) is a lightweight, always-available fallback, but it's
+a soft nudge rather than a strong identity lock. `train_character_lora.py` trains a small
+rank-8 SDXL LoRA on the UNet for one character, giving a noticeably stronger, more consistent
+likeness once trained - complementary to IP-Adapter, not a replacement for it.
+
+There's no photo set to train from - a character only exists in prose - so the trainer
+bootstraps its own training images: it generates a handful of portraits of the character
+across several fixed camera angles/expressions (`manga_pipeline/character_lora.py`'s
+`TRAINING_VIEW_PROMPTS`) using the same base checkpoint, then trains a LoRA on those.
+
+```bash
+python train_character_lora.py <story_id> "<character name>" \
+  --style-prompt "monochrome manga, screentone shading" \
+  --checkpoint stabilityai/sdxl-turbo
+```
+
+This needs a real GPU and takes real wall-clock time - a few minutes per character on a 16GB
+card (RTX 5060 Ti), most of it fixed overhead (loading the base checkpoint, generating the
+bootstrap images) rather than the training loop itself, which runs at roughly 0.27s/step. It's
+not something to run casually per character. Also available from the studio: a "Train LoRA"
+button on each character card (Stage B cast view), running as a background job the same way
+page generation does. The trained adapter is saved to
+`models/character_loras/<story_id>/<character>/` and recorded on the character's registry
+entry; `generate_panel()` picks it up automatically once `use_character_lora` is turned on
+(a per-generation toggle, off by default - a story with nothing trained yet behaves exactly as
+before). Camera framing and character descriptions are unaffected either way - the LoRA only
+ever influences the panel's rendered likeness.
+
+Default step count (300) was chosen from a real comparison, not guessed: 250 and 500 steps were
+both trained end-to-end on real story characters and compared against the IP-Adapter-only
+baseline across three different scenes/seeds each. Both step counts produced a visibly more
+consistent likeness than baseline (eye shape, nose, eyebrow style, and face silhouette all read
+as clearly "the same person" across different poses, where the baseline set showed more
+per-panel drift in those same features) - since the gap between 250 and 500 steps looked
+small relative to the fixed per-run overhead, 300 was picked as a reasonable default rather
+than defaulting to the more expensive end. `--rank` (8) and `--bootstrap-count` (8) weren't
+separately tuned - 8 is a conventional default for a small character LoRA, not verified against
+alternatives here.
+
+Implementation note: this is a deliberately minimal DreamBooth-style trainer (UNet LoRA only,
+no text-encoder LoRA, batch size 1, fixed per-image captions) rather than a full-featured one -
+reasonable for a first pass on a handful of bootstrapped images, at some cost to final quality
+versus a larger, more careful setup. One real bug worth flagging for anyone extending this:
+training the LoRA parameters in fp16 (matching the frozen base model) produces NaN loss within
+1-2 optimizer steps - fp16 AdamW state on a small parameter count is numerically unstable. The
+fix (already applied) is `diffusers.training_utils.cast_training_params(unet, dtype=torch.float32)`
+right after `add_adapter()`, keeping the LoRA weights in fp32 while the frozen base stays fp16.
+
 ## Project status
 
 This is an active prototype, not a finished product. Known limitations are tracked
@@ -150,8 +200,9 @@ honestly rather than papered over:
   filter (3+ words) cuts the clearest false positives (single emphasized words, short
   titles) but can't tell a genuine thought from italicized reported speech.
 - Cross-page character identity consistency (Stage B) is a real, visible improvement over
-  text-only conditioning but not perfect — an anime-tuned IP-Adapter or per-character LoRA
-  would likely close the remaining gap.
+  text-only conditioning but not perfect with IP-Adapter alone. A per-character LoRA (see
+  "Character LoRA" above) closes more of the gap once trained, but it's opt-in, one-character-
+  at-a-time, and real GPU time per character - not a default anyone gets for free.
 - A LoRA-fine-tuned captioner (`train_captioner.py`, `manga_pipeline/captioner.py`) is
   implemented, trained, and wired into Stage A as an opt-in alternative to the bridge LLM for
   panel captions. It trains on `data/caption_pairs_curated.jsonl`, a 2,000-example

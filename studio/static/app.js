@@ -581,12 +581,17 @@ function renderCharacters(characters, emptyMessage, storyId, kind) {
     const imgHtml = c.reference_image_url
       ? `<img src="${c.reference_image_url}" alt="${escapeHtml(name)}" />`
       : `<div class="placeholder">Not designed yet</div>`;
+    const loraBadge = c.has_lora ? `<div class="meta">LoRA trained</div>` : "";
+    const loraButton = kind === "registry" ? `<button class="btn secondary lora-train-btn">Train LoRA</button>` : "";
     const card = el(`
       <div class="card char-card">
         <button class="card-delete" title="Delete ${escapeHtml(name)}">&times;</button>
         ${imgHtml}
         <h3>${escapeHtml(name)}</h3>
         <div class="meta">${escapeHtml(c.description || "")}</div>
+        ${loraBadge}
+        ${loraButton}
+        <div class="status-line lora-status"></div>
       </div>
     `);
     if (storyId && kind) {
@@ -599,9 +604,64 @@ function renderCharacters(characters, emptyMessage, storyId, kind) {
         await refreshIdentityGrids(storyId);
       });
     }
+    const loraBtn = card.querySelector(".lora-train-btn");
+    if (loraBtn) {
+      loraBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        startCharacterLoraTraining(storyId, name, loraBtn, card.querySelector(".lora-status"));
+      });
+    }
     grid.appendChild(card);
   }
   return grid;
+}
+
+async function startCharacterLoraTraining(storyId, name, button, status) {
+  if (
+    !confirm(
+      `Train a LoRA for "${name}"? This generates a handful of extra portrait images and trains for several ` +
+        "hundred steps directly on this machine's GPU - it can take a while (minutes, not seconds) and will " +
+        "hold the GPU lock for the duration, blocking other adapt/cast/generate jobs."
+    )
+  ) {
+    return;
+  }
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Starting...";
+  try {
+    const { job_id } = await api(`/api/stories/${storyId}/characters/${encodeURIComponent(name)}/train-lora`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    pollLoraJob(job_id, storyId, button, status);
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
+    button.disabled = false;
+  }
+}
+
+async function pollLoraJob(jobId, storyId, button, status) {
+  try {
+    const job = await api(`/api/jobs/${jobId}`);
+    status.textContent = job.message;
+    if (job.status === "done") {
+      await refreshIdentityGrids(storyId);
+      return;
+    }
+    if (job.status === "error") {
+      status.classList.add("error");
+      button.disabled = false;
+      return;
+    }
+    setTimeout(() => pollLoraJob(jobId, storyId, button, status), 2000);
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
+    button.disabled = false;
+  }
 }
 
 async function refreshIdentityGrids(storyId) {
@@ -734,6 +794,21 @@ function renderGeneratePanel(storyId) {
           <label>Adapter scale</label>
           <input type="number" id="g-scale" value="0.6" min="0" max="1" step="0.05" />
         </div>
+        <div>
+          <label>Character LoRA</label>
+          <select id="g-char-lora">
+            <option value="false">off</option>
+            <option value="true">on</option>
+          </select>
+        </div>
+        <div>
+          <label>LoRA scale</label>
+          <input type="number" id="g-char-lora-scale" value="0.8" min="0" max="2" step="0.05" />
+        </div>
+      </div>
+      <div class="status-line">
+        Character LoRA only affects characters you've trained one for (see the character cards
+        above) - anyone else still falls back to identity adapter conditioning.
       </div>
       <label><input type="checkbox" id="g-force" style="width:auto;display:inline-block;margin-right:6px;" />Regenerate existing pages too</label>
       <div class="status-line">
@@ -754,6 +829,8 @@ async function startGeneration(storyId) {
   const steps = parseInt(document.getElementById("g-steps").value, 10);
   const use_identity_adapter = document.getElementById("g-adapter").value === "true";
   const identity_adapter_scale = parseFloat(document.getElementById("g-scale").value);
+  const use_character_lora = document.getElementById("g-char-lora").value === "true";
+  const character_lora_scale = parseFloat(document.getElementById("g-char-lora-scale").value);
   const force = document.getElementById("g-force").checked;
   const status = document.getElementById("g-status");
   const button = document.getElementById("g-submit");
@@ -766,7 +843,15 @@ async function startGeneration(storyId) {
     const { job_id } = await api(`/api/stories/${storyId}/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ backend, steps, use_identity_adapter, identity_adapter_scale, force }),
+      body: JSON.stringify({
+        backend,
+        steps,
+        use_identity_adapter,
+        identity_adapter_scale,
+        use_character_lora,
+        character_lora_scale,
+        force,
+      }),
     });
     pollJob(job_id, storyId, status, button);
   } catch (e) {

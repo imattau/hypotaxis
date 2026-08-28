@@ -16,8 +16,13 @@ from manga_pipeline.backends import (
     _prop_notes,
     _round_to_8,
 )
+from manga_pipeline.character_lora import (
+    build_training_caption,
+    default_lora_output_dir,
+    sanitize_adapter_name,
+)
 from manga_pipeline.config import PipelineConfig
-from manga_pipeline.registry import CharacterRegistry
+from manga_pipeline.registry import CharacterEntry, CharacterRegistry
 from manga_pipeline.schema import Page, Panel
 
 
@@ -84,3 +89,120 @@ def test_resolve_target_zero_names_falls_back_to_dominant():
 def test_resolve_target_multiple_names_skips_conditioning():
     backend = DiffusersBackend(PipelineConfig())
     assert backend._resolve_target(["Aiko", "Ren"], dominant="Ren") is None
+
+
+# ---------- character_lora.py pure helpers ----------
+
+
+def test_sanitize_adapter_name_strips_punctuation():
+    assert sanitize_adapter_name("Jules'") == "Jules"
+    assert sanitize_adapter_name("Dr. Mina Park") == "Dr._Mina_Park"
+
+
+def test_sanitize_adapter_name_falls_back_for_empty_input():
+    assert sanitize_adapter_name("") == "character"
+    assert sanitize_adapter_name("'''") == "character"
+
+
+def test_build_training_caption_includes_all_parts():
+    caption = build_training_caption(
+        "Aiko", "shoulder-length black hair, red satchel", "monochrome manga style", "profile view, plain background"
+    )
+    assert caption == (
+        "monochrome manga style, character reference portrait of Aiko, "
+        "shoulder-length black hair, red satchel, profile view, plain background"
+    )
+
+
+def test_build_training_caption_omits_empty_parts():
+    caption = build_training_caption("Aiko", "", "", "front-facing portrait, plain background")
+    assert caption == "character reference portrait of Aiko, front-facing portrait, plain background"
+
+
+def test_default_lora_output_dir_uses_sanitized_name(tmp_path):
+    result = default_lora_output_dir(tmp_path, "rain_letter", "Jules'")
+    assert result == tmp_path / "character_loras" / "rain_letter" / "Jules"
+
+
+# ---------- DiffusersBackend._activate_character_lora ----------
+
+
+class _FakePipe:
+    def __init__(self):
+        self.load_calls: list[tuple[str, str]] = []
+        self.set_adapters_calls: list[tuple[list[str], list[float]]] = []
+        self.disable_calls = 0
+
+    def load_lora_weights(self, path, adapter_name):
+        self.load_calls.append((path, adapter_name))
+
+    def set_adapters(self, names, adapter_weights):
+        self.set_adapters_calls.append((names, adapter_weights))
+
+    def disable_lora(self):
+        self.disable_calls += 1
+
+
+def test_activate_character_lora_noop_when_feature_disabled(tmp_path):
+    lora_dir = tmp_path / "aiko_lora"
+    lora_dir.mkdir()
+    cfg = PipelineConfig(use_character_lora=False)
+    backend = DiffusersBackend(cfg)
+    backend._base_pipe = _FakePipe()
+    entry = CharacterEntry(name="Aiko", lora_path=str(lora_dir))
+
+    backend._activate_character_lora("Aiko", entry)
+
+    assert backend._base_pipe.load_calls == []
+    assert backend._base_pipe.set_adapters_calls == []
+
+
+def test_activate_character_lora_noop_when_no_lora_path(tmp_path):
+    cfg = PipelineConfig(use_character_lora=True)
+    backend = DiffusersBackend(cfg)
+    backend._base_pipe = _FakePipe()
+    entry = CharacterEntry(name="Aiko")  # lora_path defaults to ""
+
+    backend._activate_character_lora("Aiko", entry)
+
+    assert backend._base_pipe.load_calls == []
+
+
+def test_activate_character_lora_noop_when_path_missing_on_disk():
+    cfg = PipelineConfig(use_character_lora=True)
+    backend = DiffusersBackend(cfg)
+    backend._base_pipe = _FakePipe()
+    entry = CharacterEntry(name="Aiko", lora_path="/nonexistent/path")
+
+    backend._activate_character_lora("Aiko", entry)
+
+    assert backend._base_pipe.load_calls == []
+
+
+def test_activate_character_lora_loads_and_activates_once(tmp_path):
+    lora_dir = tmp_path / "aiko_lora"
+    lora_dir.mkdir()
+    cfg = PipelineConfig(use_character_lora=True, character_lora_scale=0.75)
+    backend = DiffusersBackend(cfg)
+    backend._base_pipe = _FakePipe()
+    entry = CharacterEntry(name="Aiko", lora_path=str(lora_dir))
+
+    backend._activate_character_lora("Aiko", entry)
+    backend._activate_character_lora("Aiko", entry)  # second call: already active, no duplicate work
+
+    assert backend._base_pipe.load_calls == [(str(lora_dir), "Aiko")]
+    assert backend._base_pipe.set_adapters_calls == [(["Aiko"], [0.75])]
+
+
+def test_activate_character_lora_disables_when_switching_to_no_lora(tmp_path):
+    lora_dir = tmp_path / "aiko_lora"
+    lora_dir.mkdir()
+    cfg = PipelineConfig(use_character_lora=True)
+    backend = DiffusersBackend(cfg)
+    backend._base_pipe = _FakePipe()
+    entry = CharacterEntry(name="Aiko", lora_path=str(lora_dir))
+
+    backend._activate_character_lora("Aiko", entry)
+    backend._activate_character_lora(None, None)
+
+    assert backend._base_pipe.disable_calls == 1

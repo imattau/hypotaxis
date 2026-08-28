@@ -20,6 +20,13 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from manga_pipeline.captioner import Captioner  # noqa: E402
+from manga_pipeline.character_lora import (  # noqa: E402
+    TRAINING_VIEW_PROMPTS,
+    build_training_caption,
+    default_lora_output_dir,
+    train_character_lora,
+)
+from manga_pipeline.backends import DiffusersBackend  # noqa: E402
 from manga_pipeline.config import PipelineConfig  # noqa: E402
 from manga_pipeline.llm import SmallLLM  # noqa: E402
 from manga_pipeline.pipeline import prepare_cast as prepare_cast_pipeline  # noqa: E402
@@ -42,6 +49,7 @@ DATASET_PATH = ROOT / "data" / "caption_pairs.jsonl"
 # dataset" for how to produce this
 CAPTIONER_ADAPTER_DIR = ROOT / "models" / "captioner" / "adapter"
 CAPTIONER_BASE_MODEL = "google-t5/t5-base"
+MODELS_DIR = ROOT / "models"
 
 app = FastAPI(title="Manga Production Studio")
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR), check_dir=False), name="output")
@@ -357,7 +365,11 @@ def _registry_payload(registry: CharacterRegistry) -> dict:
                 ref_url = f"/output/{rel.as_posix()}"
             except ValueError:
                 ref_url = None
-        result[name] = {"description": entry.description, "reference_image_url": ref_url}
+        result[name] = {
+            "description": entry.description,
+            "reference_image_url": ref_url,
+            "has_lora": bool(entry.lora_path and _project_path(entry.lora_path).exists()),
+        }
     return result
 
 
@@ -496,6 +508,82 @@ def prepare_cast(story_id: str, req: PrepareCastRequest):
     return {"job_id": job_id}
 
 
+class TrainCharacterLoraRequest(BaseModel):
+    checkpoint: str = "stabilityai/sdxl-turbo"
+    device: str = "auto"
+    bootstrap_count: int = Field(len(TRAINING_VIEW_PROMPTS), ge=1, le=len(TRAINING_VIEW_PROMPTS))
+    steps: int = Field(300, ge=10, le=5000)
+    rank: int = Field(8, ge=1, le=64)
+    lr: float = Field(1e-4, gt=0, le=1e-2)
+    resolution: int = Field(768, ge=256, le=1024)
+
+
+def _run_train_lora_job(
+    job_id: str, story_id: str, name: str, story: Story, req: TrainCharacterLoraRequest
+) -> None:
+    job = _jobs[job_id]
+    job["status"] = "running"
+
+    def on_progress(msg: str) -> None:
+        job["message"] = msg
+
+    try:
+        registry = CharacterRegistry(REGISTRY_DIR / f"{story_id}.json")
+        entry = registry.get(name)
+        if entry is None:
+            raise ValueError(f"'{name}' not found in this story's registry")
+
+        cfg = PipelineConfig(
+            backend="diffusers", checkpoint=req.checkpoint, device=req.device, output_dir=str(OUTPUT_DIR)
+        )
+        backend = DiffusersBackend(cfg)
+
+        on_progress(f"generating {req.bootstrap_count} bootstrap training images")
+        image_paths = backend.generate_character_lora_images(
+            story_id, name, story.style_prompt, registry, count=req.bootstrap_count
+        )
+        captions = [
+            build_training_caption(name, entry.description, story.style_prompt, view)
+            for view in TRAINING_VIEW_PROMPTS[: len(image_paths)]
+        ]
+
+        output_dir = default_lora_output_dir(MODELS_DIR, story_id, name)
+        train_character_lora(
+            image_paths,
+            captions,
+            checkpoint=req.checkpoint,
+            output_dir=output_dir,
+            rank=req.rank,
+            steps=req.steps,
+            learning_rate=req.lr,
+            resolution=req.resolution,
+            device=req.device,
+            on_progress=on_progress,
+        )
+        registry.set_lora_path(name, str(output_dir))
+        _finish_job(job, "done")
+    except Exception as e:  # noqa: BLE001
+        _finish_job(job, "error", str(e))
+    finally:
+        _release_gpu()
+
+
+@app.post("/api/stories/{story_id}/characters/{name}/train-lora")
+def train_lora(story_id: str, name: str, req: TrainCharacterLoraRequest):
+    story = _story_or_404(story_id)
+    registry = CharacterRegistry(REGISTRY_DIR / f"{_validate_story_id(story_id)}.json")
+    if registry.get(name) is None:
+        raise HTTPException(404, f"'{name}' not found in this story's registry - generate cast first")
+
+    if not _try_claim_gpu():
+        raise HTTPException(409, "another job (adapt, cast, or generate) is already running - only one at a time on this GPU")
+
+    job_id = _create_job()
+    thread = threading.Thread(target=_run_train_lora_job, args=(job_id, story_id, name, story, req), daemon=True)
+    thread.start()
+    return {"job_id": job_id}
+
+
 class GenerateRequest(BaseModel):
     backend: str = "mock"
     checkpoint: str = "stabilityai/sdxl-turbo"
@@ -504,6 +592,8 @@ class GenerateRequest(BaseModel):
     guidance_scale: float = Field(1.0, ge=0, le=30)
     use_identity_adapter: bool = True
     identity_adapter_scale: float = Field(0.6, ge=0, le=2)
+    use_character_lora: bool = False
+    character_lora_scale: float = Field(0.8, ge=0, le=2)
     force: bool = False
 
 
@@ -539,6 +629,8 @@ def generate(story_id: str, req: GenerateRequest):
         guidance_scale=req.guidance_scale,
         use_identity_adapter=req.use_identity_adapter,
         identity_adapter_scale=req.identity_adapter_scale,
+        use_character_lora=req.use_character_lora,
+        character_lora_scale=req.character_lora_scale,
         output_dir=str(OUTPUT_DIR),
         registry_dir=str(REGISTRY_DIR),
     )

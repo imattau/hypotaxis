@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw
 
 from pathlib import Path
 
+from .character_lora import TRAINING_VIEW_PROMPTS, sanitize_adapter_name
 from .config import PipelineConfig, resolve_device
 from .fonts import load_font, wrap_to_width
 from .registry import CharacterRegistry
@@ -113,6 +114,15 @@ class ImageBackend(ABC):
         generation (see parse_prop_profiles), so this reference is purely
         documentation, not fed back into generate_panel. Default no-op;
         MockBackend has nothing to prepare."""
+
+    def generate_character_lora_images(
+        self, story_id: str, name: str, style_prompt: str, registry: CharacterRegistry, count: int = 8
+    ) -> list:
+        """Bootstrap a small set of varied training images for
+        train_character_lora.py's per-character LoRA trainer - see
+        manga_pipeline/character_lora.py. Default no-op (empty list);
+        MockBackend has no real generation to bootstrap from."""
+        return []
 
     @abstractmethod
     def generate_panel(
@@ -231,6 +241,12 @@ class DiffusersBackend(ImageBackend):
         self._base_pipe = None
         self._ip_adapter_loaded = False
         self._neutral_ip_image = None
+        # per-character LoRA (see character_lora.py) - tracks which adapters
+        # are already loaded into the pipe (loading is comparatively slow;
+        # switching the *active* one via set_adapters()/disable_lora() is
+        # cheap) and which one, if any, is currently active
+        self._loaded_lora_adapters: set[str] = set()
+        self._active_lora_adapter: str | None = None
 
     def _load(self):
         if self._base_pipe is not None:
@@ -346,6 +362,71 @@ class DiffusersBackend(ImageBackend):
         self._load()
         for name in prop_registry.all():
             self._prop_reference_image(name, story_id, style_prompt, prop_registry, force=force)
+
+    def generate_character_lora_images(
+        self, story_id: str, name: str, style_prompt: str, registry: CharacterRegistry, count: int = 8
+    ) -> list[Path]:
+        """Bootstrap `count` varied portrait images of `name` for
+        train_character_lora.py, since there's no photo set to train a
+        character-identity LoRA from - only the character's text
+        description and whatever the base model already renders for it.
+        Each image uses a different TRAINING_VIEW_PROMPTS entry (own seed)
+        so the LoRA sees the character across several angles/expressions
+        rather than memorizing one static pose (see character_lora.py's
+        TRAINING_VIEW_PROMPTS docstring). Saved under
+        <output_dir>/<story_id>/characters/<name>/lora_training/, distinct
+        from the single reference image _reference_image() maintains.
+        """
+        self._load()
+        import torch
+
+        entry = registry.get(name)
+        description = entry.description if entry else name
+        views = TRAINING_VIEW_PROMPTS[: max(1, min(count, len(TRAINING_VIEW_PROMPTS)))]
+
+        out_dir = self._asset_dir(story_id, "characters") / sanitize_adapter_name(name) / "lora_training"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        paths: list[Path] = []
+        for i, view in enumerate(views):
+            prompt = f"{style_prompt}, character reference portrait of {name}, {description}, {view}"
+            generator = torch.Generator(device=self.device).manual_seed(
+                _seed_for(f"{story_id}:lora_training:{name}", i)
+            )
+            result = self._base_pipe(
+                prompt=prompt,
+                num_inference_steps=self.cfg.steps,
+                guidance_scale=self.cfg.guidance_scale,
+                width=768,
+                height=768,
+                generator=generator,
+                **self._ip_kwargs(self._base_pipe, None, 0.0, None, 0.0),
+            )
+            path = out_dir / f"{i:02d}.png"
+            result.images[0].save(path)
+            paths.append(path)
+        return paths
+
+    def _activate_character_lora(self, char_name: str | None, char_entry) -> None:
+        """Load/switch the active per-character LoRA adapter for the panel
+        about to be generated (see character_lora.py, train_character_lora.py).
+        No-op unless cfg.use_character_lora is on and this character has a
+        trained adapter on disk - a story with none trained yet behaves
+        identically to before this feature existed."""
+        lora_path = char_entry.lora_path if char_entry else ""
+        if not self.cfg.use_character_lora or not lora_path or not Path(lora_path).exists():
+            if self._active_lora_adapter is not None:
+                self._base_pipe.disable_lora()
+                self._active_lora_adapter = None
+            return
+
+        adapter_name = sanitize_adapter_name(char_name or "")
+        if adapter_name not in self._loaded_lora_adapters:
+            self._base_pipe.load_lora_weights(lora_path, adapter_name=adapter_name)
+            self._loaded_lora_adapters.add(adapter_name)
+        if self._active_lora_adapter != adapter_name:
+            self._base_pipe.set_adapters([adapter_name], adapter_weights=[self.cfg.character_lora_scale])
+            self._active_lora_adapter = adapter_name
 
     def _generate_reference(self, prompt: str, story_id: str, name: str, kind: str, registry: CharacterRegistry):
         import torch
@@ -476,6 +557,11 @@ class DiffusersBackend(ImageBackend):
             else None
         )
         loc_scale = self.cfg.identity_adapter_scale if loc_image is not None else 0.0
+
+        # a trained LoRA only ever applies to the single resolved character
+        # (never abstract/no-form ones, same as IP-Adapter conditioning) -
+        # see _activate_character_lora
+        self._activate_character_lora(char_name if not (char_entry and char_entry.is_abstract) else None, char_entry)
 
         # SDXL requires width/height to be multiples of 8; a panel's own box in
         # the page layout (e.g. a third of the page width for an H3 layout)

@@ -2,3 +2,4 @@ torch
 diffusers
 transformers
 accelerate
+peft  # needed at inference time for per-character LoRA (train_character_lora.py), not just training
