@@ -517,10 +517,20 @@ class DiffusersBackend(ImageBackend):
 
     def _load_pose_pipe(self) -> None:
         """Lazily loads the separate pose-ControlNet pipeline (see
-        cfg.use_pose_controlnet) - a real second SDXL pipeline in memory,
-        only paid for on the first panel that actually needs it, not for
-        every story regardless of whether any panel ever tags 2+
-        characters."""
+        cfg.use_pose_controlnet) - a real second full-SDXL pipeline in
+        memory, only paid for on the first panel that actually needs it, not
+        for every story regardless of whether any panel ever tags 2+
+        characters.
+
+        enable_model_cpu_offload() rather than .to(device): this pipe
+        coexists with self._base_pipe (never unloaded once a story starts
+        generating), and a real run hit CUDA OOM at VAE decode with both
+        fully resident on a 16GB card - unsurprising in hindsight, since
+        cfg.use_identity_adapter (on by default) already puts _base_pipe
+        itself on cpu-offload for the same reason (see _load). Slower per
+        pose-conditioned panel, but that path is already ~7-8x the normal
+        per-panel cost regardless, so this isn't the dominant cost.
+        """
         if self._pose_pipe is not None:
             return
         import torch
@@ -533,7 +543,10 @@ class DiffusersBackend(ImageBackend):
         )
         self._pose_pipe.vae.enable_slicing()
         self._pose_pipe.vae.enable_tiling()
-        self._pose_pipe.to(self.device)
+        if self.device.startswith("cuda"):
+            self._pose_pipe.enable_model_cpu_offload(device=self.device)
+        else:
+            self._pose_pipe.to(self.device)
 
     def _generate_with_pose_controlnet(self, prompt: str, count: int, width: int, height: int, generator) -> Image.Image:
         """Real generation comparisons (not just prompt wording) found no

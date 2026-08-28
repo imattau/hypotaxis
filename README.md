@@ -193,14 +193,27 @@ instructions are a well-known weak point for SDXL-class models, distinct from th
 framing language that *did* fix camera-hint adherence (see "Camera hint prompt expansion"
 below).
 
-`use_pose_controlnet` (off by default) fixes this with a structural guarantee instead of a
+`use_pose_controlnet` (off by default) fixes this with real structural conditioning instead of a
 prompt hope: `manga_pipeline/pose_skeleton.py` generates a synthetic OpenPose skeleton image -
 not ML pose estimation, since there's no source photo to estimate a pose from, but a
 deterministic, evenly-spaced standing-figure skeleton with exactly as many figures as the panel
 has tagged characters, drawn in the exact keypoint/color convention `controlnet_aux` (and the
-OpenPose-trained ControlNet checkpoint) expects. Fed as ControlNet conditioning, this reliably
-produced the right headcount and rough positioning across every real test run, where prompt
-wording alone couldn't.
+OpenPose-trained ControlNet checkpoint) expects.
+
+**This substantially improves headcount reliability, but it is not a guarantee** - worth being
+precise about, since an earlier draft of this section overclaimed one. Across real generations
+at the default `pose_controlnet_scale=0.5`, roughly 5 in 6 came out with the right figure count;
+the rest still dropped or lost a figure, the same failure mode this feature exists to fix, just
+less often. Raising the scale to compensate was tried and made things *worse*, not better: at
+0.7, one previously-good seed now rendered zero figures at all - a new, more severe failure mode
+that hadn't existed at 0.5. Conditioning strength isn't a dial that moves monotonically toward
+"more reliable" here, so 0.5 (the better-tested value) is the default, not a stronger-sounding
+number that turned out not to help. A retry-with-detection approach (verify the output with a
+real OpenPose detector, regenerate with a different seed if the count comes up short) was also
+tried and didn't move the measured success rate either - it traded which specific case failed
+for another at ~3x the generation cost, so it isn't part of this feature. Net: this is a real,
+large improvement over prompt-only phrasing (which was reliably wrong, not occasionally), but
+still probabilistic, not absolute - budget for the occasional wrong headcount even with this on.
 
 Real cost: the ControlNet checkpoint (`thibaud/controlnet-openpose-sdxl-1.0`) is trained
 against full SDXL base, not the lighter `sdxl-turbo` checkpoint this project defaults to
@@ -208,18 +221,19 @@ elsewhere, so this loads a second, separate SDXL pipeline the first time a panel
 it (`DiffusersBackend._load_pose_pipe`) - real extra VRAM, and full SDXL base's normal
 (non-turbo) 30 steps/8.5 guidance run at roughly 7-8x the per-image time of the rest of the
 pipeline. Only panels with 2+ tagged characters ever take this path; everything else is
-unaffected.
+unaffected. `_load_pose_pipe` uses `enable_model_cpu_offload` rather than a plain `.to(device)`
+for the same reason `_load` already does for `_base_pipe` under `use_identity_adapter` - a real
+run hit CUDA OOM with both pipes fully resident on a 16GB card before this was added.
 
-`pose_controlnet_scale` (default 0.5) trades headcount/position reliability against how much
-the shared text prompt gets to drive each figure's actual appearance. Two values were compared
-head-to-head on the same real scene: 0.65 locked position tightly but rendered both figures as
-visually similar girls, ignoring that the prompt named one male and one female character; 0.5
-kept the same reliable headcount/position while correctly differentiating the two by the text
-prompt. That's still a real, open limitation, not a full fix: this only constrains *how many*
-figures and roughly *where* - not *who's who*. Nothing here assigns a specific character's
-identity/LoRA to a specific skeleton position, so a multi-character panel still can't get the
-same strong per-character likeness lock a single-character panel gets from IP-Adapter/Character
-LoRA above; it can only stop the model from silently getting the headcount wrong.
+`pose_controlnet_scale` also trades headcount/position reliability against how much the shared
+text prompt gets to drive each figure's actual appearance - a separate axis from the reliability
+question above. 0.65 locked position more tightly in one real comparison but rendered both
+figures as visually similar girls, ignoring that the prompt named one male and one female
+character; 0.5 differentiated the two by the text prompt correctly. That's still a real, open
+limitation on top of the headcount one: this only constrains *how many* figures and roughly
+*where* - not *who's who*. Nothing here assigns a specific character's identity/LoRA to a
+specific skeleton position, so a multi-character panel still can't get the same strong
+per-character likeness lock a single-character panel gets from IP-Adapter/Character LoRA above.
 
 ## Camera hint prompt expansion
 
