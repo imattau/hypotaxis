@@ -89,6 +89,9 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("unsupported adapter manifest schema")
     if not all(isinstance(manifest[field], str) and manifest[field].strip() for field in required if field != "files"):
         raise ValueError("manifest string fields must be non-empty strings")
+    license_value = manifest["license"]
+    if len(license_value) > 200 or any(ord(character) < 32 for character in license_value):
+        raise ValueError("manifest license must be a short single-line value")
     if not isinstance(manifest["files"], list) or not manifest["files"]:
         raise ValueError("manifest files must be a non-empty list")
     for entry in manifest["files"]:

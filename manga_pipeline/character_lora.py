@@ -54,6 +54,34 @@ def default_lora_output_dir(models_dir: str | Path, story_id: str, name: str) ->
     return Path(models_dir) / "character_loras" / story_id / sanitize_adapter_name(name)
 
 
+def build_character_training_metadata(
+    *,
+    story_id: str,
+    character: str,
+    checkpoint: str,
+    rank: int,
+    steps: int,
+    resolution: int,
+    examples: int,
+) -> dict[str, object]:
+    """Return reproducible metadata for a character-LoRA training run."""
+
+    if not story_id.strip() or not character.strip() or not checkpoint.strip():
+        raise ValueError("story_id, character, and checkpoint must be non-empty")
+    if rank <= 0 or steps <= 0 or resolution <= 0 or examples <= 0:
+        raise ValueError("rank, steps, resolution, and examples must be positive")
+    return {
+        "method": "character-lora",
+        "story_id": story_id,
+        "character": character,
+        "base_model": checkpoint,
+        "rank": rank,
+        "steps": steps,
+        "resolution": resolution,
+        "examples": examples,
+    }
+
+
 def train_character_lora(
     image_paths: list[Path],
     captions: list[str],

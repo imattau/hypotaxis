@@ -35,6 +35,16 @@ def test_manifest_rejects_path_escape():
         validate_manifest(manifest)
 
 
+def test_manifest_rejects_multiline_or_oversized_license():
+    manifest = _manifest()
+    manifest["license"] = "MIT\nnotice"
+    with pytest.raises(ValueError, match="single-line"):
+        validate_manifest(manifest)
+    manifest["license"] = "x" * 201
+    with pytest.raises(ValueError, match="short"):
+        validate_manifest(manifest)
+
+
 def test_load_manifest_and_hash_file(tmp_path):
     payload = b"adapter payload"
     adapter = tmp_path / "adapter_model.safetensors"

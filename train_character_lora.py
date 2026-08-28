@@ -7,6 +7,7 @@ from pathlib import Path
 from manga_pipeline.backends import DiffusersBackend
 from manga_pipeline.character_lora import (
     TRAINING_VIEW_PROMPTS,
+    build_character_training_metadata,
     build_training_caption,
     default_lora_output_dir,
     train_character_lora,
@@ -70,6 +71,18 @@ def main() -> None:
         device=args.device,
         on_progress=print,
     )
+
+    training_metadata = build_character_training_metadata(
+        story_id=args.story_id,
+        character=args.character,
+        checkpoint=args.checkpoint,
+        rank=args.rank,
+        steps=args.steps,
+        resolution=args.resolution,
+        examples=len(image_paths),
+    )
+    (output_dir / "training-metadata.json").write_text(json.dumps(training_metadata, indent=2) + "\n", encoding="utf-8")
+    metrics["training_metadata"] = training_metadata
 
     registry.set_lora_path(args.character, str(output_dir))
     print(json.dumps(metrics, indent=2))

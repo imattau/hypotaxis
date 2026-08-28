@@ -160,6 +160,9 @@ manifest.
 The report and rating builders only target Hypotaxis release (kind 30078) and
 composition (kind 30079) events, preventing accidental labels on unrelated
 Nostr events.
+Manifest license metadata is required to be a short, single-line value; this
+preserves support for SPDX identifiers, URLs, and custom license references
+without allowing control-character or oversized metadata injection.
 Studio discovery also supports signed 1–5 ratings using the
 `hypotaxis.adapter.rating` label namespace for both releases and compositions.
 It keeps the latest rating from each author and displays average/count for
@@ -200,4 +203,27 @@ authorization header, while relay publication remains a browser-side
 `nostr-tools` operation.
 Training declaration flags and `--evaluations-json` use the same validation as
 the Studio packaging API, including optional dataset SHA-256 and example
-counts.
+counts. `--training-dataset-file` can compute the dataset digest and count
+non-empty JSONL/text records automatically, rejecting conflicting overrides.
+Existing sidecars can be imported with `--training-metadata-json`; explicit
+training flags override matching sidecar fields and all resulting metadata is
+validated before the bundle is written.
+
+Shared-corpus comparisons can use `manga_pipeline.adapter_evaluation`:
+`build_exact_match_evaluation` accepts reference/prediction pairs, performs a
+deterministic case/whitespace-normalized comparison, and returns a validated
+evaluation record suitable for `--evaluations-json` or a Studio manifest.
+The `evaluate_adapter.py` command wraps this for JSONL files:
+
+```bash
+python evaluate_adapter.py predictions.jsonl \
+  --dataset curated-caption-v1 --output evaluations.json
+```
+Pass `--include-camera` when rows also contain `reference_camera` and
+`prediction_camera` fields; the command then emits both caption exact-match
+and structured camera-accuracy records.
+
+Character-LoRA runs also write `training-metadata.json` beside the trained
+weights. It records the story and character identity, base checkpoint, rank,
+steps, resolution, and number of generated training examples so the resulting
+adapter can be packaged with auditable training provenance.

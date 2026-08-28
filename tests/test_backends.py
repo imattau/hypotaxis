@@ -8,6 +8,7 @@ model download.
 from __future__ import annotations
 
 import json
+import pytest
 
 from manga_pipeline.backends import (
     DiffusersBackend,
@@ -20,6 +21,7 @@ from manga_pipeline.backends import (
     _round_to_8,
 )
 from manga_pipeline.character_lora import (
+    build_character_training_metadata,
     build_training_caption,
     default_lora_output_dir,
     sanitize_adapter_name,
@@ -173,6 +175,20 @@ def test_build_training_caption_omits_empty_parts():
 def test_default_lora_output_dir_uses_sanitized_name(tmp_path):
     result = default_lora_output_dir(tmp_path, "rain_letter", "Jules'")
     assert result == tmp_path / "character_loras" / "rain_letter" / "Jules"
+
+
+def test_build_character_training_metadata_is_reproducible():
+    metadata = build_character_training_metadata(
+        story_id="rain_letter", character="Jules", checkpoint="stabilityai/sdxl-turbo",
+        rank=8, steps=300, resolution=768, examples=7,
+    )
+    assert metadata["method"] == "character-lora"
+    assert metadata["examples"] == 7
+    with pytest.raises(ValueError, match="positive"):
+        build_character_training_metadata(
+            story_id="rain_letter", character="Jules", checkpoint="base",
+            rank=0, steps=300, resolution=768, examples=7,
+        )
 
 
 # ---------- DiffusersBackend._activate_character_lora ----------
