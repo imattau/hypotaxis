@@ -135,18 +135,18 @@ def test_upload_adapter_endpoint_verifies_bundle_and_uploads_each_file(tmp_path,
     calls = []
     monkeypatch.setattr(
         studio_app,
-        "upload_blob",
-        lambda server, path, content_type, authorization: calls.append((server, path.name, content_type, authorization))
-        or {"sha256": manifest["files"][0]["sha256"], "url": "https://cdn.example/blob"},
+        "upload_bundle_to_servers",
+        lambda manifest, bundle, servers, authorization: calls.append((manifest, bundle, servers, authorization))
+        or {servers[0]: [{"sha256": manifest["files"][0]["sha256"], "url": "https://cdn.example/blob"}]},
     )
     result = studio_app.upload_adapter(
         studio_app.UploadAdapterRequest(
-            name="grounding", version="1.0.0", server_url="https://blossom.example", authorization="Nostr token"
+            name="grounding", version="1.0.0", server_urls=["https://blossom.example"], authorization="Nostr token"
         )
     )
     assert result["uploaded"] is True
     assert result["manifest_sha256"]
-    assert calls == [("https://blossom.example", "adapter_model.safetensors", "application/octet-stream", "Nostr token")]
+    assert calls[0][2:] == (["https://blossom.example"], "Nostr token")
 
 
 def test_mirror_adapter_blob_endpoint_returns_descriptor(monkeypatch):

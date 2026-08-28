@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from abc import ABC, abstractmethod
 
@@ -9,6 +10,7 @@ from PIL import Image, ImageDraw
 from pathlib import Path
 
 from .character_lora import TRAINING_VIEW_PROMPTS, sanitize_adapter_name
+from .adapter_distribution import resolve_composition_paths
 from .config import PipelineConfig, resolve_device
 from .fonts import load_font, wrap_to_width
 from .pose_skeleton import multi_person_skeleton
@@ -331,6 +333,7 @@ class DiffusersBackend(ImageBackend):
         # cheap) and which one, if any, is currently active
         self._loaded_lora_adapters: set[str] = set()
         self._active_lora_adapter: str | None = None
+        self._active_composition_path: str | None = None
         # separate pose-ControlNet pipe (see _load_pose_pipe) - only loaded
         # lazily, the first time a panel actually needs it
         self._pose_pipe = None
@@ -514,6 +517,34 @@ class DiffusersBackend(ImageBackend):
         if self._active_lora_adapter != adapter_name:
             self._base_pipe.set_adapters([adapter_name], adapter_weights=[self.cfg.character_lora_scale])
             self._active_lora_adapter = adapter_name
+
+    def _activate_composition(self) -> bool:
+        """Load and activate the configured, integrity-checked adapter bank."""
+
+        composition_path = self.cfg.adapter_composition_path
+        if not composition_path:
+            if self._active_composition_path is not None:
+                self._base_pipe.disable_lora()
+                self._active_composition_path = None
+            return False
+        path = Path(composition_path).resolve()
+        if self._active_composition_path == str(path):
+            return True
+        composition = json.loads(path.read_text(encoding="utf-8"))
+        components = resolve_composition_paths(composition, path.parent.parent)
+        names = []
+        weights = []
+        for component in components:
+            adapter_name = sanitize_adapter_name(f"{composition['name']}_{component['name']}_{component['version']}")
+            if adapter_name not in self._loaded_lora_adapters:
+                self._base_pipe.load_lora_weights(component["path"], adapter_name=adapter_name)
+                self._loaded_lora_adapters.add(adapter_name)
+            names.append(adapter_name)
+            weights.append(component["weight"])
+        self._base_pipe.set_adapters(names, adapter_weights=weights)
+        self._active_composition_path = str(path)
+        self._active_lora_adapter = None
+        return True
 
     def _load_pose_pipe(self) -> None:
         """Lazily loads the separate pose-ControlNet pipeline (see
@@ -718,7 +749,8 @@ class DiffusersBackend(ImageBackend):
         # a trained LoRA only ever applies to the single resolved character
         # (never abstract/no-form ones, same as IP-Adapter conditioning) -
         # see _activate_character_lora
-        self._activate_character_lora(char_name if not (char_entry and char_entry.is_abstract) else None, char_entry)
+        if not self._activate_composition():
+            self._activate_character_lora(char_name if not (char_entry and char_entry.is_abstract) else None, char_entry)
 
         # SDXL requires width/height to be multiples of 8; a panel's own box in
         # the page layout (e.g. a third of the page width for an H3 layout)

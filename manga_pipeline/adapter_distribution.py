@@ -702,6 +702,45 @@ def mirror_blob(
         return _json_response(response)
 
 
+def upload_bundle_to_servers(
+    manifest: dict[str, Any],
+    bundle_root: str | Path,
+    server_urls: Iterable[str],
+    *,
+    authorization: str | None = None,
+    opener=urllib.request.urlopen,
+) -> dict[str, list[dict[str, Any]]]:
+    """Publish every verified bundle file to multiple Blossom servers.
+
+    Results are grouped by server. A server is only reported as successful
+    after all files have uploaded and returned hash-consistent descriptors;
+    failures on one server do not prevent attempts on the remaining mirrors.
+    """
+
+    validate_manifest(manifest)
+    bundle_root = Path(bundle_root).resolve()
+    verify_bundle(manifest, bundle_root)
+    servers = list(dict.fromkeys(server_urls))
+    if not servers:
+        raise ValueError("at least one Blossom server is required")
+    results: dict[str, list[dict[str, Any]]] = {}
+    failures: dict[str, str] = {}
+    for server in servers:
+        descriptors: list[dict[str, Any]] = []
+        try:
+            for entry in manifest["files"]:
+                content_type = "application/octet-stream"
+                descriptors.append(upload_blob(server, bundle_root / entry["path"], content_type=content_type, authorization=authorization, opener=opener))
+            results[server] = descriptors
+        except (OSError, RuntimeError, ValueError) as exc:
+            failures[server] = str(exc)
+    if failures:
+        results["_failures"] = [{"server": server, "error": error} for server, error in failures.items()]
+    if not results or all(key == "_failures" for key in results):
+        raise RuntimeError("all Blossom bundle uploads failed: " + "; ".join(f"{server}: {error}" for server, error in failures.items()))
+    return results
+
+
 def install_from_blossom(
     manifest: dict[str, Any],
     install_root: str | Path,

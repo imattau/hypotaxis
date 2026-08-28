@@ -21,6 +21,7 @@ from manga_pipeline.adapter_distribution import (
     install_from_blossom,
     mirror_blob,
     upload_blob,
+    upload_bundle_to_servers,
     TorrentUnavailableError,
     create_torrent,
     download_torrent,
@@ -244,6 +245,28 @@ def test_mirror_blob_sends_bud04_json_and_header():
     assert requests[0].full_url == "https://mirror.example/mirror"
     assert json.loads(requests[0].data) == {"url": "https://origin.example/" + "a" * 64 + ".safetensors"}
     assert requests[0].headers["Authorization"] == "Nostr signed-token"
+
+
+def test_upload_bundle_to_servers_verifies_and_reports_mirror_results(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "adapter_model.safetensors").write_bytes(b"weights")
+    manifest = build_manifest(source, name="grounding", version="1.0.0", base_model="base", license="MIT")
+    bundle = tmp_path / "bundle"
+    write_bundle(source, bundle, manifest)
+    calls = []
+
+    def fake_upload(server, path, **kwargs):
+        calls.append((server, path.name))
+        if server == "https://bad.example":
+            raise OSError("offline")
+        return {"sha256": manifest["files"][0]["sha256"], "url": server + "/blob"}
+
+    monkeypatch.setattr("manga_pipeline.adapter_distribution.upload_blob", fake_upload)
+    result = upload_bundle_to_servers(manifest, bundle, ["https://good.example", "https://bad.example", "https://good.example"])
+    assert "https://good.example" in result
+    assert result["_failures"][0]["server"] == "https://bad.example"
+    assert calls == [("https://good.example", "adapter_model.safetensors"), ("https://bad.example", "adapter_model.safetensors")]
 
 
 class _FakeResponse:

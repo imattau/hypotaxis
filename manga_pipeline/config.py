@@ -57,6 +57,9 @@ class PipelineConfig:
     # identity signal once someone has invested the training time.
     use_character_lora: bool = False
     character_lora_scale: float = 0.8
+    # Optional verified adapter-bank composition manifest. When set, this
+    # takes precedence over the per-character LoRA for generated panels.
+    adapter_composition_path: str = ""
     # opt-in pose-ControlNet conditioning for multi-character panels (see
     # manga_pipeline/pose_skeleton.py) - off by default since it loads a
     # wholly separate SDXL pipeline (the ControlNet checkpoint needs full

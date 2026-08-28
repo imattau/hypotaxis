@@ -44,6 +44,9 @@ unavailable. `upload_blob` and `mirror_blob` implement Blossom BUD-02 and
 BUD-04, including `X-SHA-256`, content metadata, and optional BUD-11
 authorization. Private-key signing remains outside Python: callers pass an
 already signed kind-24242 event or a `Nostr ...` header from the browser signer.
+`upload_bundle_to_servers` verifies the complete bundle before attempting all
+configured servers, deduplicates the list, and returns successful descriptors
+alongside per-server failures so a temporary mirror outage is recoverable.
 
 The Studio browser now uses bundled `nostr-tools` for discovery. Its
 `SimplePool` queries multiple relays and `verifyEvent` validates NIP-01 event

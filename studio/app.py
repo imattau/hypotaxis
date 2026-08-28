@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import mimetypes
 import os
 import re
 import shutil
@@ -35,7 +34,7 @@ from manga_pipeline.adapter_distribution import (  # noqa: E402
     query_nostr_relays,
     schnorr_available,
     verify_schnorr_signature,
-    upload_blob,
+    upload_bundle_to_servers,
     torrent_available,
     write_bundle,
 )  # noqa: E402
@@ -217,7 +216,7 @@ class InstallAdapterRequest(BaseModel):
 class UploadAdapterRequest(BaseModel):
     name: str = Field(max_length=100)
     version: str = Field(max_length=50)
-    server_url: str = Field(max_length=500)
+    server_urls: list[str] = Field(min_length=1, max_length=20)
     authorization: str | None = Field(None, max_length=20000)
 
 
@@ -336,20 +335,15 @@ def upload_adapter(req: UploadAdapterRequest):
         from manga_pipeline.adapter_distribution import verify_bundle
 
         verify_bundle(manifest, bundle)
-        descriptors = []
-        for entry in manifest["files"]:
-            content_type = mimetypes.guess_type(entry["path"])[0] or "application/octet-stream"
-            descriptors.append(
-                upload_blob(
-                    req.server_url,
-                    bundle / entry["path"],
-                    content_type=content_type,
-                    authorization=req.authorization,
-                )
-            )
+        results = upload_bundle_to_servers(
+            manifest,
+            bundle,
+            req.server_urls,
+            authorization=req.authorization,
+        )
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
-    return {"uploaded": True, "manifest_sha256": manifest_digest(manifest), "descriptors": descriptors}
+    return {"uploaded": True, "manifest_sha256": manifest_digest(manifest), "servers": results}
 
 
 @app.post("/api/adapters/mirror")
@@ -971,6 +965,7 @@ class GenerateRequest(BaseModel):
     identity_adapter_scale: float = Field(0.6, ge=0, le=2)
     use_character_lora: bool = False
     character_lora_scale: float = Field(0.8, ge=0, le=2)
+    adapter_composition_path: str = Field("", max_length=500)
     use_pose_controlnet: bool = False
     pose_controlnet_scale: float = Field(0.5, ge=0, le=2)
     force: bool = False
@@ -1010,6 +1005,7 @@ def generate(story_id: str, req: GenerateRequest):
         identity_adapter_scale=req.identity_adapter_scale,
         use_character_lora=req.use_character_lora,
         character_lora_scale=req.character_lora_scale,
+        adapter_composition_path=req.adapter_composition_path,
         use_pose_controlnet=req.use_pose_controlnet,
         pose_controlnet_scale=req.pose_controlnet_scale,
         output_dir=str(OUTPUT_DIR),

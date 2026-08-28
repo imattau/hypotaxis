@@ -7,6 +7,8 @@ model download.
 
 from __future__ import annotations
 
+import json
+
 from manga_pipeline.backends import (
     DiffusersBackend,
     _abstract_character_note,
@@ -22,6 +24,7 @@ from manga_pipeline.character_lora import (
     default_lora_output_dir,
     sanitize_adapter_name,
 )
+from manga_pipeline.adapter_distribution import build_composition, build_manifest, manifest_digest, write_bundle
 from manga_pipeline.config import PipelineConfig
 from manga_pipeline.registry import CharacterEntry, CharacterRegistry
 from manga_pipeline.schema import Page, Panel
@@ -254,6 +257,33 @@ def test_activate_character_lora_disables_when_switching_to_no_lora(tmp_path):
     backend._activate_character_lora(None, None)
 
     assert backend._base_pipe.disable_calls == 1
+
+
+def test_activate_composition_loads_verified_components_and_weights(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    manifests = []
+    root = tmp_path / "shared_adapters"
+    for name in ("one", "two"):
+        component_source = source / name
+        component_source.mkdir()
+        (component_source / "adapter_model.safetensors").write_bytes(name.encode())
+        manifest = build_manifest(component_source, name=name, version="1.0.0", base_model="base", license="MIT")
+        write_bundle(component_source, root / f"{name}-1.0.0", manifest)
+        manifests.append(manifest)
+    composition = build_composition(
+        "bank", "1.0.0", "base",
+        [{"name": m["name"], "version": m["version"], "manifest_sha256": manifest_digest(m), "weight": weight} for m, weight in zip(manifests, (0.5, 1.25))],
+    )
+    composition_path = root / "compositions" / "bank-1.0.0.json"
+    composition_path.parent.mkdir()
+    composition_path.write_text(json.dumps(composition), encoding="utf-8")
+    backend = DiffusersBackend(PipelineConfig(adapter_composition_path=str(composition_path)))
+    backend._base_pipe = _FakePipe()
+
+    assert backend._activate_composition() is True
+    assert [call[1] for call in backend._base_pipe.load_calls] == ["bank_one_1.0.0", "bank_two_1.0.0"]
+    assert backend._base_pipe.set_adapters_calls == [(["bank_one_1.0.0", "bank_two_1.0.0"], [0.5, 1.25])]
 
 
 # ---------- DiffusersBackend._generate_with_pose_controlnet ----------
