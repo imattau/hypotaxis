@@ -268,6 +268,39 @@ def _draw_bubble(
     return bubble_h + 4
 
 
+_MAX_MERGED_CHARS = 160
+
+
+def _merge_consecutive(dialogue: list[DialogueLine]) -> list[DialogueLine]:
+    """Collapses a run of consecutive same-speaker, same-kind lines into one
+    bubble. Stage A's dialogue extraction (split_dialogue in story_adapt.py)
+    emits one DialogueLine per quoted/italicized span in the source prose,
+    so an uninterrupted turn split across several sentences/quotes in the
+    manuscript - "She paused." "I wasn't ready for. After that." "And now?",
+    all the same speaker with no other speaker between them - previously
+    rendered as a tower of separate bubbles instead of the single turn it
+    actually is.
+
+    Capped at _MAX_MERGED_CHARS: Stage A's speaker attribution is a
+    heuristic (see split_dialogue's docstring) and sometimes wrong for many
+    lines in a row - unlike an uninterrupted real turn, that failure mode
+    produces long runs of "same speaker" that are actually several
+    back-and-forth exchanges mis-tagged as one speaker. Merging those
+    wholesale turned into a single bubble spanning the entire dialogue
+    stack, overflowing the panel - worse than the many-small-bubbles problem
+    this function exists to fix. The cap keeps a real short turn intact
+    while forcing a long mis-attributed run back into separate bubbles."""
+    merged: list[DialogueLine] = []
+    for line in dialogue:
+        prev = merged[-1] if merged else None
+        combined_len = len(prev.text) + 1 + len(line.text) if prev is not None else 0
+        if prev is not None and prev.speaker == line.speaker and prev.kind == line.kind and combined_len <= _MAX_MERGED_CHARS:
+            merged[-1] = DialogueLine(speaker=prev.speaker, text=f"{prev.text} {line.text}", kind=prev.kind)
+        else:
+            merged.append(line)
+    return merged
+
+
 def _font_size_for_panel(draw: ImageDraw.ImageDraw, dialogue: list[DialogueLine], panel_w: int, panel_h: int, base_size: int) -> int:
     """Shrinks the font (down to a readable floor) until this panel's whole
     dialogue stack actually fits in its height - rather than always using
@@ -301,7 +334,15 @@ def render_bubbles(
     if page_img.mode != "RGBA":
         page_img = page_img.convert("RGBA")
     draw = ImageDraw.Draw(page_img)
-    base_size = max(12, page_size[1] // 45)
+    # //45 (the previous divisor) picks a font sized for the page as a
+    # whole regardless of how many panels split it up, so a page with 2-3
+    # columns of panels still started the shrink-to-fit search in
+    # _font_size_for_panel at full letterer-for-one-big-panel size - a
+    # narrow panel would only come down to something proportionate after
+    # several lines' worth of bubbles forced the shrink loop to act. //60
+    # keeps the same fit-driven shrink behavior but starts it from a size
+    # that already reads as normal comic lettering on a typical panel.
+    base_size = max(12, page_size[1] // 60)
     boxes = boxes_for(page.layout)
 
     detector = None
@@ -321,10 +362,11 @@ def render_bubbles(
             local_anchors = detector.find_anchors(panel_images[panel_index])
             anchors = [(box_px[0] + ax, box_px[1] + ay) for ax, ay in local_anchors]
 
-        font = load_font(_font_size_for_panel(draw, panel.dialogue, panel_w, panel_h, base_size))
+        dialogue = _merge_consecutive(panel.dialogue)
+        font = load_font(_font_size_for_panel(draw, dialogue, panel_w, panel_h, base_size))
 
         cursor_y = box_px[1]
-        for line_index, line in enumerate(panel.dialogue):
+        for line_index, line in enumerate(dialogue):
             if box_px[3] - cursor_y < _MIN_FONT_SIZE + 8:
                 break  # no usable room left in this panel even at the minimum font size
             local_box = (box_px[0], cursor_y, box_px[2], box_px[3])

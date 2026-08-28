@@ -115,6 +115,19 @@ def target_panel_count(word_count: int, min_panels: int = 6, max_panels: int = 9
     return max(min_panels, min(max_panels, round(word_count / words_per_panel)))
 
 
+_MAX_DIALOGUE_PER_CHUNK = 3
+
+
+def _dialogue_span_count(text: str) -> int:
+    """Counts quoted speech spans and italicized thought spans in `text` -
+    the same two span kinds split_dialogue() (further below) turns into a
+    DialogueLine, and so into a rendered bubble. A cheap over-count (it
+    doesn't apply split_dialogue's own filters, e.g. the "*emphasis on a
+    quote*"/single-word-italics exclusions) is fine here: this only feeds a
+    chunk-boundary heuristic, not the actual dialogue extraction."""
+    return len(_QUOTE_RE.findall(text)) + len(_THOUGHT_RE.findall(text))
+
+
 def segment_text(
     text: str, drop_threshold: float = 0.15, max_sentences: int = 3, target_panels: int | None = None
 ) -> list[str]:
@@ -128,6 +141,17 @@ def segment_text(
     score - i.e. low-importance/descriptive filler gets folded into a
     neighboring panel first, while higher-importance beats keep their own
     panel for as long as the budget allows.
+
+    A chunk this dense in quoted/thought dialogue produces a panel with a
+    tower of speech bubbles - real dialogue-heavy prose has plenty of very
+    short exchanges ("Yeah." "Sure," "Weird?"), so a handful of them still
+    fits comfortably under a word-count-only budget even though they'd
+    render as far too many bubbles for one panel. _MAX_DIALOGUE_PER_CHUNK
+    is therefore enforced as a second, independent hard boundary alongside
+    max_sentences during initial segmentation, and again as a floor the
+    target_panels compression step below refuses to merge past - so a
+    dialogue-dense passage ends up with more (smaller) panels than the raw
+    word budget alone would give it, rather than one overcrowded panel.
     """
     sentences = split_sentences(text)
     if not sentences:
@@ -140,17 +164,21 @@ def segment_text(
     embedder = get_embedder()
     embeddings = embedder.encode(sentences, normalize_embeddings=True)
     sims = [float(embeddings[i] @ embeddings[i + 1]) for i in range(len(embeddings) - 1)]
+    dialogue_counts = [_dialogue_span_count(s) for s in sentences]
 
     # build initial chunks as (start, end) sentence-index ranges rather than
     # joined strings, so they can still be merged during compression below
     ranges: list[tuple[int, int]] = []
     start = 0
+    running_dialogue = 0
     for i, sim in enumerate(sims):
         boundary = sim < (1 - drop_threshold)
+        running_dialogue += dialogue_counts[i]
         current_len = i + 1 - start
-        if boundary or current_len >= max_sentences:
+        if boundary or current_len >= max_sentences or running_dialogue > _MAX_DIALOGUE_PER_CHUNK:
             ranges.append((start, i + 1))
             start = i + 1
+            running_dialogue = 0
     ranges.append((start, len(sentences)))
 
     if target_panels is not None and len(ranges) > target_panels:
@@ -160,9 +188,23 @@ def segment_text(
             lo, hi = r
             return sum(importance[lo:hi]) / (hi - lo)
 
+        def chunk_dialogue(r: tuple[int, int]) -> int:
+            lo, hi = r
+            return sum(dialogue_counts[lo:hi])
+
         while len(ranges) > target_panels:
-            pair_scores = [chunk_score(ranges[i]) + chunk_score(ranges[i + 1]) for i in range(len(ranges) - 1)]
-            merge_at = min(range(len(pair_scores)), key=lambda i: pair_scores[i])
+            mergeable = [
+                i
+                for i in range(len(ranges) - 1)
+                if chunk_dialogue(ranges[i]) + chunk_dialogue(ranges[i + 1]) <= _MAX_DIALOGUE_PER_CHUNK
+            ]
+            if not mergeable:
+                # every remaining adjacent pair would exceed the per-panel
+                # dialogue cap if merged - stop compressing early and accept
+                # more panels than target_panels rather than crowd one
+                break
+            pair_scores = [chunk_score(ranges[i]) + chunk_score(ranges[i + 1]) for i in mergeable]
+            merge_at = mergeable[min(range(len(pair_scores)), key=lambda k: pair_scores[k])]
             merged = (ranges[merge_at][0], ranges[merge_at + 1][1])
             ranges[merge_at : merge_at + 2] = [merged]
 
