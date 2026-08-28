@@ -267,6 +267,29 @@ a wide-shot panel a layout box that's physically too narrow to hold it, falling 
 any-template-of-this-count behavior only when no template of that panel count has a suitable
 box at all.
 
+## Per-panel generation vs. a shared page image
+
+Each panel is generated independently (`DiffusersBackend.generate_panel`), sized to its own
+layout box, rather than generating one shared "page" image and deriving each panel from it. An
+earlier version of this project tried the shared-image approach and reverted it: panels on the
+same page can have very different aspect ratios (a thin `V3` strip vs. a wide box from "Camera
+hint prompt expansion" above), and warping one image into each via a plain resize visibly
+stretched, squashed, and repeated the same content across panels. Cross-panel consistency
+instead rests on identity conditioning (IP-Adapter, Character LoRA) plus shared prompt wording -
+real, but not the same thing as literally sharing pixels between panels.
+
+Outpainting was explored as a way to get shared-pixel consistency without the resize distortion:
+generate one base image, then extend its canvas into each panel's own box shape instead of
+stretching it. Two real attempts (`sdxl-turbo` and the dedicated
+`diffusers/stable-diffusion-xl-1.0-inpainting-0.1` checkpoint, both at standard inpainting
+settings) both failed the same way - the extended canvas came back essentially blank instead of
+generating new content. Likely cause, not yet confirmed: filling the to-be-outpainted region
+with plain white before masking/encoding, a known sensitivity of diffusers inpainting pipelines
+that usually calls for a neutral gray or noise fill instead. Not pursued further since this
+started as an exploratory question, not a firm feature request - independent per-panel
+generation remains what's actually validated to work, and is the only approach that's been
+shown to work at all for cross-panel coherence here, not just the one preferred by default.
+
 ## Project status
 
 This is an active prototype, not a finished product. Known limitations are tracked
