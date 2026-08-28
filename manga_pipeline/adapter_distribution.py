@@ -750,6 +750,8 @@ def build_manifest(
     if metadata:
         manifest["metadata"] = metadata
     if training:
+        if "base_model" in training and training["base_model"] != base_model:
+            raise ValueError("training.base_model does not match manifest base_model")
         manifest["training"] = training
     if evaluations:
         manifest["evaluations"] = evaluations

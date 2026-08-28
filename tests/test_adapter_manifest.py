@@ -91,6 +91,19 @@ def test_manifest_accepts_training_metadata():
     validate_manifest(manifest)
 
 
+def test_manifest_rejects_training_base_model_mismatch():
+    manifest = _manifest()
+    manifest["training"] = {"method": "lora", "base_model": "different-base"}
+    with pytest.raises(ValueError, match="training.base_model"):
+        validate_manifest(manifest)
+
+
+def test_manifest_accepts_matching_training_base_model():
+    manifest = _manifest()
+    manifest["training"] = {"method": "lora", "base_model": manifest["base_model"]}
+    validate_manifest(manifest)
+
+
 def test_evaluations_validate_scores_and_dataset_identity():
     validate_evaluations([{"name": "caption-bleu", "dataset": "corpus-v1", "dataset_sha256": "b" * 64, "score": 0.82}])
     with pytest.raises(ValueError, match="between 0 and 1"):

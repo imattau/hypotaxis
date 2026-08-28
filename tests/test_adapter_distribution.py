@@ -765,6 +765,21 @@ def test_build_manifest_and_bundle_only_selected_safe_files(tmp_path):
     assert verify_bundle(manifest, bundle) == ["adapter_model.safetensors", "adapter_config.json"]
 
 
+def test_build_manifest_rejects_training_base_model_mismatch(tmp_path):
+    source = tmp_path / "adapter"
+    source.mkdir()
+    (source / "adapter_model.safetensors").write_bytes(b"weights")
+    with pytest.raises(ValueError, match="training.base_model"):
+        build_manifest(
+            source,
+            name="grounded-captioner",
+            version="1.0.0",
+            base_model="Qwen/Qwen2.5-7B-Instruct",
+            license="CC-BY-4.0",
+            training={"base_model": "google-t5/t5-base"},
+        )
+
+
 def test_build_manifest_rejects_executable_artifacts(tmp_path):
     source = tmp_path / "adapter"
     source.mkdir()

@@ -120,6 +120,9 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("distribution.blossom must be a list")
     if "training" in manifest:
         validate_training_metadata(manifest["training"])
+        training_base_model = manifest["training"].get("base_model")
+        if training_base_model is not None and training_base_model != manifest["base_model"]:
+            raise ValueError("training.base_model does not match manifest base_model")
     if "evaluations" in manifest:
         validate_evaluations(manifest["evaluations"])
 

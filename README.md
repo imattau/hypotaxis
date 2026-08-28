@@ -194,7 +194,9 @@ before). Camera framing and character descriptions are unaffected either way - t
 ever influences the panel's rendered likeness.
 
 When training metadata is imported into a distributable adapter manifest, these reproducibility
-fields are validated so malformed run provenance cannot be published silently.
+fields are validated so malformed run provenance cannot be published silently. If the sidecar
+records a base checkpoint, it must also match the manifest's declared `base_model`; this is
+checked for both newly built and imported manifests.
 
 Default step count (300) was chosen from a real comparison, not guessed: 250 and 500 steps were
 both trained end-to-end on real story characters and compared against the IP-Adapter-only

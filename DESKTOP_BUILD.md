@@ -28,11 +28,18 @@ publish APT and RPM repository indexes to `imattau/hypotaxis-distribution` via
 GitHub Pages. Configure a repository secret named `DISTRIBUTION_REPO_TOKEN`
 with write access to that repository before using tagged releases.
 
+The Flatpak job depends only on the Linux package job's executable input, not on
+the complete cross-platform matrix. This keeps Flatpak available when a
+Windows or macOS runner is delayed.
+
 Pushes to `master`, feature branches, tags beginning with `v`, and pull
 requests trigger the workflow. The generated artifact is a platform-native
 PyInstaller application; it should be tested on the target operating system
 before release. Tagged GitHub releases also include a `SHA256SUMS` manifest
 covering every downloaded build and package artifact.
+
+The workflow cancels superseded runs for the same ref, preventing older queued
+platform jobs from accumulating behind newer commits.
 
 Windows users also need a supported Microsoft WebView2 Runtime installed on
 the target machine. Linux users need the Qt or GTK native libraries required by

@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: desktop-build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit-tests:
     name: Distribution and Studio unit tests
@@ -169,10 +173,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Upload Flatpak input executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-flatpak-input
+          path: dist/hypotaxis
+          if-no-files-found: error
+          retention-days: 14
+
   linux-flatpak:
     name: Build Flatpak
     runs-on: ubuntu-22.04
-    needs: build
+    needs: linux-packages
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
       options: --privileged
@@ -183,7 +195,7 @@ jobs:
       - name: Download Linux PyInstaller executable
         uses: actions/download-artifact@v4
         with:
-          name: hypotaxis-linux
+          name: linux-flatpak-input
           path: dist
 
       - name: Configure Flathub remote
