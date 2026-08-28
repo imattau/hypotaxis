@@ -238,16 +238,23 @@ jobs:
       - name: Check out application source
         uses: actions/checkout@v4
 
+      - name: Check release signing configuration
+        env:
+          DISTRIBUTION_REPO_TOKEN: ${{ secrets.DISTRIBUTION_REPO_TOKEN }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ secrets.GPG_KEY_ID }}
+        run: |
+          test -n "${DISTRIBUTION_REPO_TOKEN}"
+          test -n "${GPG_PRIVATE_KEY}"
+          test -n "${GPG_PASSPHRASE}"
+          test -n "${GPG_KEY_ID}"
+
       - name: Download Linux packages
         uses: actions/download-artifact@v4
         with:
           name: hypotaxis-linux-packages
           path: packages
-
-      - name: Check distribution repository configuration
-        env:
-          DISTRIBUTION_REPO_TOKEN: ${{ secrets.DISTRIBUTION_REPO_TOKEN }}
-        run: test -n "${DISTRIBUTION_REPO_TOKEN}"
 
       - name: Check out distribution repository
         uses: actions/checkout@v4
@@ -265,8 +272,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y dpkg-dev apt-utils createrepo-c gnupg
           mkdir -p distribution/deb/pool/main distribution/deb/dists/stable/main/binary-amd64 distribution/rpm
-          cp packages/*.deb distribution/deb/pool/main/
-          cp packages/*.rpm distribution/rpm/
+          deb_count=$(find packages -type f -name '*.deb' | wc -l)
+          rpm_count=$(find packages -type f -name '*.rpm' | wc -l)
+          test "${deb_count}" -gt 0
+          test "${rpm_count}" -gt 0
+          find packages -type f -name '*.deb' -exec cp {} distribution/deb/pool/main/ \;
+          find packages -type f -name '*.rpm' -exec cp {} distribution/rpm/ \;
           (cd distribution/deb && dpkg-scanpackages pool /dev/null | gzip -9c > dists/stable/main/binary-amd64/Packages.gz)
           (cd distribution/deb && apt-ftparchive release dists/stable > dists/stable/Release)
           createrepo_c --update distribution/rpm

@@ -22,11 +22,15 @@ Windows, and macOS using PyInstaller. Each run publishes these artifacts:
 - `hypotaxis-windows`
 - `hypotaxis-macos`
 
-The Linux job additionally publishes `hypotaxis-linux-packages` containing a
-Flatpak bundle, AppImage, Debian package, and RPM package. Version tags also
+The Linux workflow publishes `hypotaxis-linux-packages` containing an AppImage,
+Debian package, and RPM package, plus a separate `hypotaxis-flatpak` artifact.
+Version tags also
 publish APT and RPM repository indexes to `imattau/hypotaxis-distribution` via
 GitHub Pages. Configure a repository secret named `DISTRIBUTION_REPO_TOKEN`
 with write access to that repository before using tagged releases.
+Tagged publishing also requires `GPG_PRIVATE_KEY`, `GPG_PASSPHRASE`, and
+`GPG_KEY_ID`; the workflow validates all four secrets before downloading or
+indexing packages.
 
 The Flatpak job depends only on the Linux package job's executable input, not on
 the complete cross-platform matrix. This keeps Flatpak available when a
