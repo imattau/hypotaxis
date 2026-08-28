@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import time
 from pathlib import Path
 
@@ -23,6 +24,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--magnet", default=None, help="BitTorrent magnet link")
     parser.add_argument("--nostr-pubkey", default=None, help="creator's 64-character Nostr public key")
     parser.add_argument("--created-at", type=int, default=None, help="Nostr event timestamp (defaults to current time)")
+    parser.add_argument("--training-method", default=None, help="training method, for example lora or qlora")
+    parser.add_argument("--training-rank", type=int, default=None, help="positive LoRA rank")
+    parser.add_argument("--training-dataset", default=None, help="training dataset name or version")
+    parser.add_argument("--training-dataset-sha256", default=None, help="lowercase SHA-256 digest of the training dataset")
+    parser.add_argument("--training-examples", type=int, default=None, help="number of training examples")
+    parser.add_argument("--evaluations-json", type=Path, default=None, help="JSON file containing an evaluation-record array")
     args = parser.parse_args(argv)
 
     distribution = {}
@@ -30,6 +37,17 @@ def main(argv: list[str] | None = None) -> int:
         distribution["blossom"] = args.blossom
     if args.magnet:
         distribution["torrent"] = {"magnet": args.magnet}
+    training_values = {
+        "method": args.training_method,
+        "rank": args.training_rank,
+        "dataset": args.training_dataset,
+        "dataset_sha256": args.training_dataset_sha256,
+        "examples": args.training_examples,
+    }
+    training = {key: value for key, value in training_values.items() if value is not None}
+    evaluations = None
+    if args.evaluations_json is not None:
+        evaluations = json.loads(args.evaluations_json.read_text(encoding="utf-8"))
     manifest = build_manifest(
         args.source,
         name=args.name,
@@ -38,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
         license=args.license,
         files=args.files,
         distribution=distribution or None,
+        training=training or None,
+        evaluations=evaluations,
     )
     manifest_path = write_bundle(args.source, args.output, manifest)
     if args.nostr_pubkey:

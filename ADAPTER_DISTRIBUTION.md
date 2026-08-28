@@ -157,6 +157,9 @@ artifact author's pubkey and clients can use `release_is_revoked` to hide
 matching artifacts; Studio exposes reporting for both artifact types. Report
 labels preserve a separate moderation trail without modifying the release
 manifest.
+The report and rating builders only target Hypotaxis release (kind 30078) and
+composition (kind 30079) events, preventing accidental labels on unrelated
+Nostr events.
 Studio discovery also supports signed 1–5 ratings using the
 `hypotaxis.adapter.rating` label namespace for both releases and compositions.
 It keeps the latest rating from each author and displays average/count for
@@ -165,6 +168,13 @@ Discovery also summarizes verified NIP-32 report labels per active artifact,
 deduplicating repeated reports from the same author and showing the reported
 reasons alongside the artifact. Reports are informational; revocation remains
 an author-controlled NIP-09 action.
+The browser applies the same lowercase 2–64 character report-label validation
+as the Python event builders and requires at least one configured relay before
+publishing a report.
+Before downloading a remote release or composition, Studio asks the user to
+acknowledge the declared license(s). The acknowledgement covers both direct
+Blossom installs and BitTorrent downloads, including Blossom fallback after a
+torrent failure; it does not impose a fixed SPDX allow-list.
 The packaging form can load the author's verified NIP-10063 Blossom server
 list from the configured Nostr relays and use the resulting servers as mirror
 targets. Only signed events and HTTP(S) server URLs are accepted.
@@ -176,6 +186,9 @@ python package_adapter.py path/to/adapter release/grounding-1.0.0 \
   --name grounding --version 1.0.0 \
   --base-model Qwen/Qwen2.5-7B-Instruct --license CC-BY-4.0 \
   --file adapter_model.safetensors \
+  --training-method lora --training-rank 16 \
+  --training-dataset curated-caption-v1 \
+  --evaluations-json evaluations.json \
   --nostr-pubkey <64-character-hex-pubkey>
 ```
 
@@ -185,3 +198,6 @@ that boundary remains with the browser/NIP-07 signer. The Studio API exposes
 authenticated Blossom upload and mirror routes for a signed `Nostr ...`
 authorization header, while relay publication remains a browser-side
 `nostr-tools` operation.
+Training declaration flags and `--evaluations-json` use the same validation as
+the Studio packaging API, including optional dataset SHA-256 and example
+counts.

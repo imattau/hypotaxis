@@ -627,6 +627,8 @@ async function discoverAdapters(event) {
 async function installRemoteComposition(composition, compositionEvent, releases, card) {
   const button = card.querySelector(".install-composition");
   const status = card.querySelector(".composition-install-status");
+  const licenses = [...new Set(releases.map((release) => release.manifest.license || "unspecified"))];
+  if (!confirm(`Install this composition's ${releases.length} adapter component(s)?\n\nLicenses: ${licenses.join(", ")}\n\nReview the license terms before continuing.`)) return;
   button.disabled = true;
   status.classList.remove("error");
   status.textContent = "Verifying and installing components...";
@@ -650,10 +652,20 @@ async function reportRelease(release, button) {
 }
 
 async function reportArtifact(artifactEvent, artifactKind, button) {
-  const reason = prompt("Report label (for example: license.mismatch or malware)", "license.mismatch");
-  if (!reason) return;
+  const rawReason = prompt("Report label (lowercase, for example: license.mismatch or malware)", "license.mismatch");
+  if (!rawReason) return;
+  const reason = rawReason.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9._:-]{1,63}$/.test(reason)) {
+    alert("Report labels must be 2–64 lowercase letters, numbers, dots, underscores, colons, or hyphens.");
+    return;
+  }
   if (!window.nostr || typeof window.nostr.signEvent !== "function") {
     alert("A NIP-07 browser signer is required to submit reports.");
+    return;
+  }
+  const relays = document.getElementById("adapter-relays").value.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!relays.length) {
+    alert("Enter or load at least one Nostr relay before submitting a report.");
     return;
   }
   const details = prompt("Optional report details", "") || "";
@@ -666,7 +678,7 @@ async function reportArtifact(artifactEvent, artifactKind, button) {
       content: details,
     });
     if (!verifyEvent(signed)) throw new Error("signer returned an invalid event");
-    await Promise.any(nostrPool.publish(document.getElementById("adapter-relays").value.split("\n").map((line) => line.trim()).filter(Boolean), signed));
+    await Promise.any(nostrPool.publish(relays, signed));
     button.textContent = "Reported";
   } catch (e) {
     button.textContent = "Report failed";
@@ -707,6 +719,7 @@ async function rateArtifact(artifactEvent, artifactKind, button) {
 async function downloadAdapterTorrent(release, button) {
   const card = button.closest(".card");
   const status = card.querySelector(".install-status");
+  if (!confirmAdapterLicense(release.manifest)) return;
   button.disabled = true;
   status.classList.remove("error");
   status.textContent = "Starting torrent...";
@@ -736,7 +749,7 @@ async function downloadAdapterTorrent(release, button) {
     const blossomButton = card.querySelector(".install-adapter");
     if (blossomButton && Array.isArray(release.manifest.distribution?.blossom) && release.manifest.distribution.blossom.length) {
       status.textContent = "BitTorrent failed; trying verified Blossom mirrors...";
-      await installAdapter(release, blossomButton);
+      await installAdapter(release, blossomButton, true);
     } else {
       status.textContent = "Error: " + e.message;
       status.classList.add("error");
@@ -745,9 +758,15 @@ async function downloadAdapterTorrent(release, button) {
   }
 }
 
-async function installAdapter(release, button) {
+function confirmAdapterLicense(manifest) {
+  const license = manifest.license || "unspecified";
+  return confirm(`Install ${manifest.name}@${manifest.version}?\n\nDeclared license: ${license}\n\nReview the license terms before continuing.`);
+}
+
+async function installAdapter(release, button, licenseConfirmed = false) {
   const card = button.closest(".card");
   const status = card.querySelector(".install-status");
+  if (!licenseConfirmed && !confirmAdapterLicense(release.manifest)) return;
   button.disabled = true;
   status.classList.remove("error");
   status.textContent = "Downloading and verifying...";
@@ -770,7 +789,12 @@ async function loadLocalAdapters(holder) {
   try {
     const { adapters } = await api("/api/adapters/local");
     localAdapterVersions.clear();
-    for (const adapter of adapters) localAdapterVersions.set(adapter.name, adapter.version);
+    for (const adapter of adapters) {
+      const current = localAdapterVersions.get(adapter.name);
+      if (!current || compareAdapterVersions(adapter.version, current) > 0) {
+        localAdapterVersions.set(adapter.name, adapter.version);
+      }
+    }
     holder.innerHTML = `<div class="section-title">Local Adapter Registry</div>`;
     if (adapters.length === 0) {
       holder.appendChild(el(`<p class="empty-state">No packaged adapters yet.</p>`));

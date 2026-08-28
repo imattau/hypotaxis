@@ -128,6 +128,16 @@ def test_composition_report_targets_composition_kind():
     assert report["tags"][-1] == ["k", "30079"]
 
 
+def test_report_rejects_unrelated_event_kind():
+    event = build_release_event(_manifest(), "1" * 64, 123)
+    event["kind"] = 1
+    event["id"] = nostr_event_id(event)
+    event["sig"] = "2" * 128
+
+    with pytest.raises(ValueError, match="not reportable"):
+        build_artifact_report_event(event, "2" * 64, 124, "malware")
+
+
 def test_release_rating_uses_constrained_nip32_label_event():
     release = build_release_event(_manifest(), "1" * 64, 123)
     release["sig"] = "2" * 128
@@ -145,6 +155,16 @@ def test_composition_rating_targets_composition_kind():
     event["sig"] = "2" * 128
     rating = build_artifact_rating_event(event, "2" * 64, 124, 4)
     assert rating["tags"][-1] == ["k", "30079"]
+
+
+def test_rating_rejects_unrelated_event_kind():
+    event = build_release_event(_manifest(), "1" * 64, 123)
+    event["kind"] = 1
+    event["id"] = nostr_event_id(event)
+    event["sig"] = "2" * 128
+
+    with pytest.raises(ValueError, match="not rateable"):
+        build_artifact_rating_event(event, "2" * 64, 124, 4)
 
 
 def test_signed_event_rejects_id_tampering():

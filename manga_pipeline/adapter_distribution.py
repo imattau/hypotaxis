@@ -31,6 +31,7 @@ BLOSSOM_SERVER_LIST_KIND = 10063
 NOSTR_DELETION_KIND = 5
 NOSTR_LABEL_KIND = 1985
 COMPOSITION_SCHEMA = "hypotaxis.adapter-composition.v1"
+REPORTABLE_ARTIFACT_KINDS = frozenset({NOSTR_RELEASE_KIND, NOSTR_COMPOSITION_KIND})
 
 
 class TorrentUnavailableError(RuntimeError):
@@ -348,6 +349,8 @@ def build_artifact_report_event(
     """Build a NIP-32 label event reporting a release or composition concern."""
 
     validate_signed_event(artifact_event)
+    if artifact_event["kind"] not in REPORTABLE_ARTIFACT_KINDS:
+        raise ValueError("artifact event kind is not reportable")
     _hex(pubkey, 64, "pubkey")
     if not isinstance(report, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._:-]{1,63}", report):
         raise ValueError("report must be a lowercase label")
@@ -388,6 +391,8 @@ def build_artifact_rating_event(
     """Build a NIP-32 label event for a 1–5 release or composition rating."""
 
     validate_signed_event(artifact_event)
+    if artifact_event["kind"] not in REPORTABLE_ARTIFACT_KINDS:
+        raise ValueError("artifact event kind is not rateable")
     _hex(pubkey, 64, "pubkey")
     if not isinstance(rating, int) or isinstance(rating, bool) or not 1 <= rating <= 5:
         raise ValueError("rating must be an integer from 1 to 5")
