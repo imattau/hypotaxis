@@ -7,6 +7,7 @@ const navNew = document.getElementById("nav-new");
 const navDataset = document.getElementById("nav-dataset");
 const navAdapters = document.getElementById("nav-adapters");
 const nostrPool = new SimplePool();
+const localAdapterVersions = new Map();
 
 function setNav(active) {
   navLibrary.classList.toggle("active", active === "library");
@@ -84,6 +85,20 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
+function compareAdapterVersions(left, right) {
+  const parse = (value) => String(value).split(/[.+-]/).map((part) => /^\d+$/.test(part) ? Number(part) : part);
+  const a = parse(left);
+  const b = parse(right);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const av = a[index] ?? 0;
+    const bv = b[index] ?? 0;
+    if (av === bv) continue;
+    if (typeof av === "number" && typeof bv === "number") return av - bv;
+    return String(av).localeCompare(String(bv));
+  }
+  return 0;
+}
+
 function base64Url(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   let binary = "";
@@ -128,12 +143,14 @@ function showAdapters() {
       <div class="status-line">Query Nostr relays for Hypotaxis adapter release metadata. Verified Blossom downloads are available for releases that advertise mirrors.</div>
       <label>Nostr relay URLs (one per line)</label>
       <textarea id="adapter-relays" class="compact-textarea" placeholder="wss://relay.example"></textarea>
+      <button class="btn secondary" id="load-nostr-relays" type="button">Load My Nostr Relays</button>
       <button class="btn secondary" type="submit">Discover Adapters</button>
       <div class="status-line" id="adapter-discovery-status"></div>
       <div id="adapter-discovery-results"></div>
     </form>
   `);
   discovery.addEventListener("submit", discoverAdapters);
+  discovery.querySelector("#load-nostr-relays").addEventListener("click", loadNostrRelays);
   main.appendChild(discovery);
   const registry = el(`<div id="local-adapter-registry"><div class="section-title">Local Adapter Registry</div><p class="empty-state">Loading local bundles...</p></div>`);
   main.appendChild(registry);
@@ -216,6 +233,43 @@ function showAdapters() {
   main.appendChild(compositionForm);
   loadLocalAdapters(registry);
   loadCompositions(compositions);
+}
+
+async function loadNostrRelays() {
+  const button = document.getElementById("load-nostr-relays");
+  const textarea = document.getElementById("adapter-relays");
+  const status = document.getElementById("adapter-discovery-status");
+  const bootstrapRelays = textarea.value.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!window.nostr || typeof window.nostr.getPublicKey !== "function") {
+    status.textContent = "A NIP-07 browser signer is required to load your relay list.";
+    status.classList.add("error");
+    return;
+  }
+  if (!bootstrapRelays.length) {
+    status.textContent = "Enter at least one bootstrap relay first.";
+    status.classList.add("error");
+    return;
+  }
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Loading your signed relay list...";
+  try {
+    const pubkey = await window.nostr.getPublicKey();
+    const events = await nostrPool.querySync(bootstrapRelays, { kinds: [10002], authors: [pubkey], limit: 10 });
+    const latest = events.filter((event) => verifyEvent(event)).sort((a, b) => b.created_at - a.created_at)[0];
+    if (!latest) throw new Error("no verified relay-list event found");
+    const relays = latest.tags
+      .filter((tag) => tag[0] === "r" && /^wss?:\/\//.test(tag[1]) && (!tag[2] || tag[2] === "read"))
+      .map((tag) => tag[1]);
+    if (!relays.length) throw new Error("relay list contains no read relays");
+    textarea.value = [...new Set(relays)].join("\n");
+    status.textContent = `Loaded ${new Set(relays).size} read relay(s) from your signed relay list.`;
+  } catch (error) {
+    status.textContent = "Could not load relay list: " + error.message;
+    status.classList.add("error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function createComposition(event) {
@@ -335,6 +389,12 @@ async function discoverAdapters(event) {
     }
     for (const release of releases) {
       const manifest = release.manifest;
+      const localVersion = localAdapterVersions.get(manifest.name);
+      const versionComparison = localVersion ? compareAdapterVersions(manifest.version, localVersion) : 1;
+      const installable = !localVersion || versionComparison > 0;
+      const installAction = !localVersion || versionComparison > 0
+        ? `<button class="btn secondary install-adapter" type="button">${localVersion ? "Update" : "Install from Blossom"}</button>`
+        : "";
       const card = el(`
         <div class="card">
           <h3>${escapeHtml(manifest.name)} <span class="badge">${escapeHtml(manifest.version)}</span></h3>
@@ -346,8 +406,8 @@ async function discoverAdapters(event) {
           <div class="meta">Trust: Nostr signature verified</div>
           <div class="meta">Community rating: ${release.rating_average === null ? "none yet" : `${release.rating_average.toFixed(1)}/5 (${release.rating_count})`}</div>
           <div class="meta">Event: ${escapeHtml(release.event_id.slice(0, 16))}...</div>
-          ${Array.isArray(manifest.distribution?.blossom) && manifest.distribution.blossom.length ? `<button class="btn secondary install-adapter" type="button">Install from Blossom</button>` : ""}
-          ${manifest.distribution?.torrent?.magnet ? `<button class="btn secondary torrent-download" type="button">Download via BitTorrent</button>` : ""}
+          ${Array.isArray(manifest.distribution?.blossom) && manifest.distribution.blossom.length ? installAction : ""}
+          ${manifest.distribution?.torrent?.magnet && installable ? `<button class="btn secondary torrent-download" type="button">${localVersion ? "Update via BitTorrent" : "Download via BitTorrent"}</button>` : ""}
           <button class="btn secondary report-release" type="button">Report</button>
           <button class="btn secondary rate-release" type="button">Rate</button>
           <div class="status-line install-status"></div>
@@ -443,18 +503,21 @@ async function downloadAdapterTorrent(release, button) {
       } else if (job.status === "error") {
         throw new Error(job.message);
       } else {
-        setTimeout(() => poll().catch((error) => {
-          status.textContent = "Error: " + error.message;
-          status.classList.add("error");
-          button.disabled = false;
-        }), 1000);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        return poll();
       }
     };
     await poll();
   } catch (e) {
-    status.textContent = "Error: " + e.message;
-    status.classList.add("error");
-    button.disabled = false;
+    const blossomButton = card.querySelector(".install-adapter");
+    if (blossomButton && Array.isArray(release.manifest.distribution?.blossom) && release.manifest.distribution.blossom.length) {
+      status.textContent = "BitTorrent failed; trying verified Blossom mirrors...";
+      await installAdapter(release, blossomButton);
+    } else {
+      status.textContent = "Error: " + e.message;
+      status.classList.add("error");
+      button.disabled = false;
+    }
   }
 }
 
@@ -482,6 +545,8 @@ async function installAdapter(release, button) {
 async function loadLocalAdapters(holder) {
   try {
     const { adapters } = await api("/api/adapters/local");
+    localAdapterVersions.clear();
+    for (const adapter of adapters) localAdapterVersions.set(adapter.name, adapter.version);
     holder.innerHTML = `<div class="section-title">Local Adapter Registry</div>`;
     if (adapters.length === 0) {
       holder.appendChild(el(`<p class="empty-state">No packaged adapters yet.</p>`));

@@ -63,6 +63,8 @@ the UI assets have been built.
 
 Studio's Community Discovery form now queries user-supplied relays and displays
 release metadata after browser-side Nostr signature verification.
+It can also load the signed NIP-65 kind-10002 read-relay list for the current
+NIP-07 identity, using the manually entered relays as bootstrap sources.
 
 When a discovered release advertises Blossom mirrors, Studio can now request a
 verified install. The request must include the complete signed Nostr release
@@ -91,12 +93,20 @@ Studio's Adapters tab now reports local BitTorrent availability and metadata
 state, and can create a `.torrent` for a packaged bundle. The torrent is stored
 beside (not inside) the bundle and the UI reports the resulting path.
 
+Community Discovery compares release versions with the local registry. A newer
+verified release is labeled as an Update and can be installed through Blossom
+or BitTorrent; the prior local version is retained so updates remain reversible.
+Already-installed or older releases do not show an install action.
+
 For resilience, the initial implementation should mirror complete bundles to
 multiple Blossom servers. BitTorrent already splits transfers into pieces;
 custom sharding across Blossom servers can be considered later if storage
 limits require it. Downloads should retain an HTTPS fallback and verify the
 manifest signature, file hashes, base-model compatibility, and license before
 installation.
+In the Studio browser, a failed BitTorrent download automatically falls back
+to the release's advertised Blossom mirrors when available. The fallback uses
+the same signed release event and verified, atomic Blossom installation path.
 
 The registry should preserve adapter lineage and evaluation results. A merged
 community adapter must identify its source adapters and weights, while the
