@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import re
 import shutil
@@ -20,6 +21,22 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from manga_pipeline.captioner import Captioner  # noqa: E402
+from manga_pipeline.adapter_distribution import (  # noqa: E402
+    build_manifest,
+    build_release_event,
+    create_torrent,
+    install_from_blossom,
+    manifest_digest,
+    mirror_blob,
+    parse_release_event,
+    query_nostr_relays,
+    schnorr_available,
+    verify_schnorr_signature,
+    upload_blob,
+    torrent_available,
+    write_bundle,
+)  # noqa: E402
+from manga_pipeline.adapter_manifest import canonical_json, load_manifest  # noqa: E402
 from manga_pipeline.character_lora import (  # noqa: E402
     TRAINING_VIEW_PROMPTS,
     build_training_caption,
@@ -164,6 +181,250 @@ async def extract_text(file: UploadFile):
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"could not read file: {e}")
     return {"text": text}
+
+
+class PackageAdapterRequest(BaseModel):
+    source: str = Field(max_length=500)
+    name: str = Field(max_length=100)
+    version: str = Field(max_length=50)
+    base_model: str = Field(max_length=300)
+    license: str = Field(max_length=100)
+    files: list[str] = Field(default_factory=list, max_length=50)
+    blossom: list[str] = Field(default_factory=list, max_length=20)
+    magnet: str | None = Field(None, max_length=2000)
+    nostr_pubkey: str | None = Field(None, max_length=64)
+    created_at: int | None = None
+
+
+class CreateTorrentRequest(BaseModel):
+    name: str = Field(max_length=100)
+    version: str = Field(max_length=50)
+    trackers: list[str] = Field(default_factory=list, max_length=20)
+
+
+class DiscoverAdaptersRequest(BaseModel):
+    relays: list[str] = Field(default_factory=list, max_length=20)
+    limit: int = Field(20, ge=1, le=100)
+
+
+class InstallAdapterRequest(BaseModel):
+    manifest: dict
+
+
+class UploadAdapterRequest(BaseModel):
+    name: str = Field(max_length=100)
+    version: str = Field(max_length=50)
+    server_url: str = Field(max_length=500)
+    authorization: str | None = Field(None, max_length=20000)
+
+
+class MirrorBlobRequest(BaseModel):
+    server_url: str = Field(max_length=500)
+    source_url: str = Field(max_length=2000)
+    authorization: str | None = Field(None, max_length=20000)
+
+
+def _path_under(path_value: str, root: Path) -> Path:
+    path = _project_path(path_value).resolve()
+    root = root.resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(400, "path must be inside the project") from exc
+    return path
+
+
+@app.post("/api/adapters/package")
+def package_adapter(req: PackageAdapterRequest):
+    """Create a verified local adapter bundle for later publishing."""
+
+    source = _path_under(req.source, ROOT)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", req.name):
+        raise HTTPException(400, "adapter name contains unsupported characters")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", req.version):
+        raise HTTPException(400, "adapter version contains unsupported characters")
+    output = (MODELS_DIR / "shared_adapters" / f"{req.name}-{req.version}").resolve()
+    try:
+        output.relative_to(MODELS_DIR.resolve())
+        distribution: dict = {}
+        if req.blossom:
+            distribution["blossom"] = req.blossom
+        if req.magnet:
+            distribution["torrent"] = {"magnet": req.magnet}
+        manifest = build_manifest(
+            source,
+            name=req.name,
+            version=req.version,
+            base_model=req.base_model,
+            license=req.license,
+            files=req.files or None,
+            distribution=distribution or None,
+        )
+        manifest_path = write_bundle(source, output, manifest)
+        event = None
+        if req.nostr_pubkey:
+            event = build_release_event(manifest, req.nostr_pubkey, req.created_at if req.created_at is not None else int(time.time()))
+            (output / "nostr-release-event.json").write_bytes(canonical_json(event))
+        return {"bundle_dir": str(output.relative_to(ROOT)), "manifest": manifest, "manifest_path": str(manifest_path.relative_to(ROOT)), "event": event}
+    except HTTPException:
+        raise
+    except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def _adapter_bundle(name: str, version: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", version):
+        raise HTTPException(400, "invalid adapter name or version")
+    bundle = (MODELS_DIR / "shared_adapters" / f"{name}-{version}").resolve()
+    try:
+        bundle.relative_to(MODELS_DIR.resolve())
+    except ValueError as exc:
+        raise HTTPException(400, "invalid adapter bundle path") from exc
+    if not (bundle / "manifest.json").is_file():
+        raise HTTPException(404, "local adapter bundle not found")
+    return bundle
+
+
+@app.post("/api/adapters/torrent")
+def create_adapter_torrent(req: CreateTorrentRequest):
+    """Create a BitTorrent metadata file for a local adapter bundle."""
+
+    if not torrent_available():
+        raise HTTPException(503, "BitTorrent support is unavailable; install libtorrent")
+    bundle = _adapter_bundle(req.name, req.version)
+    torrent_path = bundle.parent / f"{bundle.name}.torrent"
+    try:
+        create_torrent(bundle, torrent_path, trackers=req.trackers)
+    except (OSError, NotADirectoryError, ValueError, RuntimeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {
+        "torrent_path": str(torrent_path.relative_to(ROOT)),
+        "torrent_available": True,
+        "status": "created",
+    }
+
+
+@app.post("/api/adapters/upload")
+def upload_adapter(req: UploadAdapterRequest):
+    """Upload every verified file in a local bundle to one Blossom server."""
+
+    bundle = _adapter_bundle(req.name, req.version)
+    try:
+        manifest = load_manifest(bundle / "manifest.json")
+        from manga_pipeline.adapter_distribution import verify_bundle
+
+        verify_bundle(manifest, bundle)
+        descriptors = []
+        for entry in manifest["files"]:
+            content_type = mimetypes.guess_type(entry["path"])[0] or "application/octet-stream"
+            descriptors.append(
+                upload_blob(
+                    req.server_url,
+                    bundle / entry["path"],
+                    content_type=content_type,
+                    authorization=req.authorization,
+                )
+            )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"uploaded": True, "manifest_sha256": manifest_digest(manifest), "descriptors": descriptors}
+
+
+@app.post("/api/adapters/mirror")
+def mirror_adapter_blob(req: MirrorBlobRequest):
+    """Request a Blossom server to mirror one already-published blob."""
+
+    try:
+        descriptor = mirror_blob(
+            req.server_url,
+            req.source_url,
+            authorization=req.authorization,
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"mirrored": True, "descriptor": descriptor}
+
+
+@app.post("/api/adapters/discover")
+def discover_adapters(req: DiscoverAdaptersRequest):
+    """Discover Hypotaxis release metadata from configured Nostr relays."""
+
+    relays = [relay.strip() for relay in req.relays if relay.strip()]
+    if not relays:
+        raise HTTPException(400, "at least one Nostr relay URL is required")
+    try:
+        from manga_pipeline.adapter_distribution import NOSTR_RELEASE_KIND
+
+        events = query_nostr_relays(relays, [{"kinds": [NOSTR_RELEASE_KIND], "limit": req.limit}], max_events=req.limit)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(502, str(exc)) from exc
+    releases = []
+    can_verify_signatures = schnorr_available()
+    for event in events:
+        try:
+            manifest = parse_release_event(event)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        signature_verified = False
+        if can_verify_signatures:
+            signature_verified = verify_schnorr_signature(event)
+            if not signature_verified:
+                continue
+        releases.append(
+            {
+                "event_id": event["id"],
+                "creator_pubkey": event["pubkey"],
+                "signature_verified": signature_verified,
+                "manifest": manifest,
+            }
+        )
+    return {
+        "releases": releases,
+        "signature_verification": "verified" if can_verify_signatures else "not available",
+    }
+
+
+@app.post("/api/adapters/install")
+def install_adapter(req: InstallAdapterRequest):
+    """Install a discovered adapter after verified Blossom downloads."""
+
+    try:
+        target = install_from_blossom(req.manifest, MODELS_DIR / "shared_adapters")
+    except FileExistsError:
+        raise HTTPException(409, "adapter version is already installed")
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"installed": True, "bundle_dir": str(target.relative_to(ROOT))}
+
+
+@app.get("/api/adapters/local")
+def list_local_adapters():
+    """List locally packaged, valid adapter bundles."""
+
+    adapters = []
+    root = MODELS_DIR / "shared_adapters"
+    if not root.exists():
+        return {"adapters": adapters}
+    for manifest_path in sorted(root.glob("*/manifest.json")):
+        try:
+            manifest = load_manifest(manifest_path)
+            torrent_path = manifest_path.parent.parent / f"{manifest_path.parent.name}.torrent"
+            adapters.append(
+                {
+                    "name": manifest["name"],
+                    "version": manifest["version"],
+                    "base_model": manifest["base_model"],
+                    "file_count": len(manifest["files"]),
+                    "manifest_sha256": manifest_digest(manifest),
+                    "bundle_dir": str(manifest_path.parent.relative_to(ROOT)),
+                    "torrent_available": torrent_available(),
+                    "torrent_exists": torrent_path.is_file(),
+                    "torrent_path": str(torrent_path.relative_to(ROOT)) if torrent_path.is_file() else None,
+                }
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    return {"adapters": adapters}
 
 
 class AdaptRequest(BaseModel):

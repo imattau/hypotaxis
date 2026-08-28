@@ -1,17 +1,24 @@
+import { SimplePool } from "nostr-tools";
+import { verifyEvent } from "nostr-tools/pure";
+
 const main = document.getElementById("main");
 const navLibrary = document.getElementById("nav-library");
 const navNew = document.getElementById("nav-new");
 const navDataset = document.getElementById("nav-dataset");
+const navAdapters = document.getElementById("nav-adapters");
+const nostrPool = new SimplePool();
 
 function setNav(active) {
   navLibrary.classList.toggle("active", active === "library");
   navNew.classList.toggle("active", active === "new");
   navDataset.classList.toggle("active", active === "dataset");
+  navAdapters.classList.toggle("active", active === "adapters");
 }
 
 navLibrary.addEventListener("click", showLibrary);
 navNew.addEventListener("click", showNewStory);
 navDataset.addEventListener("click", showDatasetCuration);
+navAdapters.addEventListener("click", showAdapters);
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -93,6 +100,216 @@ async function showDatasetCuration() {
   main.appendChild(queueHolder);
   renderDatasetCounts(countsHolder, resp);
   renderCandidateQueue(queueHolder, resp);
+}
+
+function showAdapters() {
+  setNav("adapters");
+  main.innerHTML = "";
+  main.appendChild(el(`<div class="section-title">Package Adapter</div>`));
+  main.appendChild(el(`<div class="status-line">Create a verified local bundle for a trained LoRA. Blossom upload and mirror APIs are available; Nostr signing remains in the browser signer.</div>`));
+  const discovery = el(`
+    <form class="card" id="adapter-discovery-form">
+      <div class="section-title">Community Discovery</div>
+      <div class="status-line">Query Nostr relays for Hypotaxis adapter release metadata. Verified Blossom downloads are available for releases that advertise mirrors.</div>
+      <label>Nostr relay URLs (one per line)</label>
+      <textarea id="adapter-relays" class="compact-textarea" placeholder="wss://relay.example"></textarea>
+      <button class="btn secondary" type="submit">Discover Adapters</button>
+      <div class="status-line" id="adapter-discovery-status"></div>
+      <div id="adapter-discovery-results"></div>
+    </form>
+  `);
+  discovery.addEventListener("submit", discoverAdapters);
+  main.appendChild(discovery);
+  const registry = el(`<div id="local-adapter-registry"><div class="section-title">Local Adapter Registry</div><p class="empty-state">Loading local bundles...</p></div>`);
+  main.appendChild(registry);
+  const form = el(`
+    <form class="card" id="adapter-package-form">
+      <label>Source directory</label>
+      <input type="text" id="adapter-source" placeholder="models/captioner/adapter" required />
+      <label>Name</label>
+      <input type="text" id="adapter-name" value="community-adapter" required />
+      <label>Version</label>
+      <input type="text" id="adapter-version" value="1.0.0" required />
+      <label>Base model</label>
+      <input type="text" id="adapter-base" value="Qwen/Qwen2.5-7B-Instruct" required />
+      <label>License</label>
+      <input type="text" id="adapter-license" value="CC-BY-4.0" required />
+      <label>Files (one relative path per line; blank uses supported files in the directory)</label>
+      <textarea id="adapter-files" class="compact-textarea" placeholder="adapter_model.safetensors&#10;adapter_config.json"></textarea>
+      <label>Blossom mirror URLs (one per line, optional)</label>
+      <textarea id="adapter-blossom" class="compact-textarea"></textarea>
+      <label>BitTorrent magnet (optional)</label>
+      <input type="text" id="adapter-magnet" />
+      <label>Nostr public key (optional; emits an unsigned event template)</label>
+      <input type="text" id="adapter-pubkey" />
+      <button class="btn" type="submit">Package Adapter</button>
+      <div class="status-line" id="adapter-package-status"></div>
+    </form>
+  `);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button");
+    const status = form.querySelector("#adapter-package-status");
+    button.disabled = true;
+    status.classList.remove("error");
+    status.textContent = "Packaging and verifying...";
+    const lines = (id) => document.getElementById(id).value.split("\n").map((line) => line.trim()).filter(Boolean);
+    try {
+      const result = await api("/api/adapters/package", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          source: document.getElementById("adapter-source").value.trim(),
+          name: document.getElementById("adapter-name").value.trim(),
+          version: document.getElementById("adapter-version").value.trim(),
+          base_model: document.getElementById("adapter-base").value.trim(),
+          license: document.getElementById("adapter-license").value.trim(),
+          files: lines("adapter-files"),
+          blossom: lines("adapter-blossom"),
+          magnet: document.getElementById("adapter-magnet").value.trim() || null,
+          nostr_pubkey: document.getElementById("adapter-pubkey").value.trim() || null,
+        }),
+      });
+      status.textContent = `Created ${result.manifest_path} (${result.manifest.files.length} file(s) verified).`;
+    } catch (e) {
+      status.textContent = "Error: " + e.message;
+      status.classList.add("error");
+    } finally {
+      button.disabled = false;
+    }
+  });
+  main.appendChild(form);
+  loadLocalAdapters(registry);
+}
+
+async function discoverAdapters(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button");
+  const status = form.querySelector("#adapter-discovery-status");
+  const results = form.querySelector("#adapter-discovery-results");
+  const relays = form.querySelector("#adapter-relays").value.split("\n").map((line) => line.trim()).filter(Boolean);
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Querying relays...";
+  results.innerHTML = "";
+  try {
+    const events = await nostrPool.querySync(relays, { kinds: [30078], limit: 20 });
+    const releases = events
+      .filter((release) => verifyEvent(release))
+      .map((release) => {
+        try {
+          const manifest = JSON.parse(release.content);
+          if (manifest.schema !== "hypotaxis.adapter.v1" || !Array.isArray(manifest.files) || !manifest.files.length) return null;
+          return { event_id: release.id, creator_pubkey: release.pubkey, signature_verified: true, manifest };
+        } catch (_) {
+          return null;
+        }
+      })
+      .filter(Boolean);
+    status.textContent = `${releases.length} verified release(s) found.`;
+    if (releases.length === 0) {
+      results.innerHTML = "<p class='empty-state'>No Hypotaxis releases found.</p>";
+      return;
+    }
+    for (const release of releases) {
+      const manifest = release.manifest;
+      const card = el(`
+        <div class="card">
+          <h3>${escapeHtml(manifest.name)} <span class="badge">${escapeHtml(manifest.version)}</span></h3>
+          <div class="meta">${escapeHtml(manifest.base_model)} &middot; ${manifest.files.length} file(s)</div>
+          <div class="meta">Creator: ${escapeHtml(release.creator_pubkey.slice(0, 16))}...</div>
+          <div class="meta">Trust: Nostr signature verified</div>
+          <div class="meta">Event: ${escapeHtml(release.event_id.slice(0, 16))}...</div>
+          ${Array.isArray(manifest.distribution?.blossom) && manifest.distribution.blossom.length ? `<button class="btn secondary install-adapter" type="button">Install from Blossom</button>` : ""}
+          <div class="status-line install-status"></div>
+        </div>
+      `);
+      const installButton = card.querySelector(".install-adapter");
+      if (installButton) installButton.addEventListener("click", () => installAdapter(release, installButton));
+      results.appendChild(card);
+    }
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function installAdapter(release, button) {
+  const card = button.closest(".card");
+  const status = card.querySelector(".install-status");
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Downloading and verifying...";
+  try {
+    const result = await api("/api/adapters/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ manifest: release.manifest }),
+    });
+    status.textContent = `Installed at ${result.bundle_dir}`;
+    button.remove();
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
+    button.disabled = false;
+  }
+}
+
+async function loadLocalAdapters(holder) {
+  try {
+    const { adapters } = await api("/api/adapters/local");
+    holder.innerHTML = `<div class="section-title">Local Adapter Registry</div>`;
+    if (adapters.length === 0) {
+      holder.appendChild(el(`<p class="empty-state">No packaged adapters yet.</p>`));
+      return;
+    }
+    const grid = el(`<div class="grid"></div>`);
+    for (const adapter of adapters) {
+      grid.appendChild(el(`
+      <div class="card">
+        <h3>${escapeHtml(adapter.name)} <span class="badge">${escapeHtml(adapter.version)}</span></h3>
+        <div class="meta">${escapeHtml(adapter.base_model)} &middot; ${adapter.file_count} file(s)</div>
+        <div class="meta">manifest ${escapeHtml(adapter.manifest_sha256.slice(0, 16))}...</div>
+        <div class="meta">${escapeHtml(adapter.bundle_dir)}</div>
+        <div class="meta torrent-state">BitTorrent: ${adapter.torrent_exists ? `ready (${escapeHtml(adapter.torrent_path)})` : adapter.torrent_available ? "not created" : "libtorrent unavailable"}</div>
+        ${adapter.torrent_available && !adapter.torrent_exists ? `<button class="btn secondary create-torrent" type="button">Create Torrent</button>` : ""}
+        <div class="status-line torrent-status"></div>
+      </div>
+      `));
+      const torrentButton = grid.lastElementChild.querySelector(".create-torrent");
+      if (torrentButton) {
+        torrentButton.addEventListener("click", () => createTorrent(adapter, torrentButton));
+      }
+    }
+    holder.appendChild(grid);
+  } catch (e) {
+    holder.innerHTML = `<div class="section-title">Local Adapter Registry</div><p class="status-line error">Could not load local bundles: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function createTorrent(adapter, button) {
+  const card = button.closest(".card");
+  const status = card.querySelector(".torrent-status");
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Creating torrent metadata...";
+  try {
+    const result = await api("/api/adapters/torrent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: adapter.name, version: adapter.version, trackers: [] }),
+    });
+    card.querySelector(".torrent-state").textContent = `BitTorrent: ready (${result.torrent_path})`;
+    button.remove();
+    status.textContent = "Torrent metadata created.";
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
+    button.disabled = false;
+  }
 }
 
 function renderDatasetCounts(holder, resp) {

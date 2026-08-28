@@ -160,6 +160,10 @@ textarea {
   line-height: 1.5;
 }
 
+.compact-textarea {
+  min-height: 84px;
+}
+
 input:focus, textarea:focus, select:focus {
   outline: none;
   border-color: var(--red);

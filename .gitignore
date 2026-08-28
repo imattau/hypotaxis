@@ -10,6 +10,7 @@ models/
 .venv/
 venv/
 *.egg-info/
+node_modules/
 
 # private test content (adult/personal manuscript, kept local-only)
 stories/soft_reset*.json

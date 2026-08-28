@@ -1,0 +1,14 @@
+{
+  "name": "hypotaxis-studio-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build-ui": "esbuild studio/static/app.js --bundle --format=iife --minify --outfile=studio/static/app.bundle.js"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.25.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}
