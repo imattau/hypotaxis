@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from manga_pipeline.captioner import Captioner  # noqa: E402
 from manga_pipeline.config import PipelineConfig  # noqa: E402
 from manga_pipeline.llm import SmallLLM  # noqa: E402
 from manga_pipeline.pipeline import prepare_cast as prepare_cast_pipeline  # noqa: E402
@@ -36,6 +37,11 @@ STORIES_DIR = ROOT / "stories"
 REGISTRY_DIR = ROOT / "registry"
 OUTPUT_DIR = ROOT / "output"
 DATASET_PATH = ROOT / "data" / "caption_pairs.jsonl"
+# canonical location train_captioner.py's CLI defaults write to
+# (--output-dir models/captioner) - see README's "Curating a clean caption
+# dataset" for how to produce this
+CAPTIONER_ADAPTER_DIR = ROOT / "models" / "captioner" / "adapter"
+CAPTIONER_BASE_MODEL = "google-t5/t5-base"
 
 app = FastAPI(title="Manga Production Studio")
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR), check_dir=False), name="output")
@@ -161,6 +167,7 @@ class AdaptRequest(BaseModel):
     character_profiles: str = Field("", max_length=100_000)
     location_profiles: str = Field("", max_length=100_000)
     prop_profiles: str = Field("", max_length=100_000)
+    use_trained_captioner: bool = False
 
 
 def _run_adapt_job(job_id: str, req: AdaptRequest, story_id: str) -> None:
@@ -180,6 +187,11 @@ def _run_adapt_job(job_id: str, req: AdaptRequest, story_id: str) -> None:
         )
         location_profiles = parse_location_profiles(req.location_profiles) if req.location_profiles else None
         prop_profiles = parse_prop_profiles(req.prop_profiles) if req.prop_profiles else None
+        captioner = (
+            Captioner(CAPTIONER_ADAPTER_DIR, base_model=CAPTIONER_BASE_MODEL, device=req.device)
+            if req.use_trained_captioner
+            else None
+        )
         story = adapt_story(
             req.prose,
             story_id,
@@ -195,6 +207,7 @@ def _run_adapt_job(job_id: str, req: AdaptRequest, story_id: str) -> None:
             location_profiles=location_profiles,
             prop_registry=prop_registry,
             prop_profiles=prop_profiles,
+            captioner=captioner,
         )
         STORIES_DIR.mkdir(parents=True, exist_ok=True)
         story.save(STORIES_DIR / f"{story_id}.json")
@@ -213,6 +226,12 @@ def adapt(req: AdaptRequest):
     story_id = req.id.strip()
     if not story_id or not story_id.replace("_", "").replace("-", "").isalnum():
         raise HTTPException(400, "story id must be alphanumeric (with - or _)")
+    if req.use_trained_captioner and not CAPTIONER_ADAPTER_DIR.exists():
+        raise HTTPException(
+            400,
+            f"no trained captioner found at {CAPTIONER_ADAPTER_DIR} - run train_captioner.py first "
+            "(see README's \"Curating a clean caption dataset\")",
+        )
 
     if not _try_claim_gpu():
         raise HTTPException(409, "another job (adapt or generate) is already running - only one at a time on this GPU")

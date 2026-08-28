@@ -10,7 +10,9 @@ spaCy's en_core_web_sm, which the project already requires locally.
 
 from __future__ import annotations
 
+from manga_pipeline.captioner import build_captioner_source
 from manga_pipeline.story_adapt import (
+    _caption_input,
     _merge_person_aliases,
     _normalize_quotes,
     _parse_caption_response,
@@ -27,6 +29,32 @@ from manga_pipeline.story_adapt import (
     split_sentences,
 )
 from manga_pipeline.schema import DialogueLine, Panel
+
+
+def test_caption_input_appends_known_appearances_when_present():
+    assert _caption_input("Jules walked in.", "Jules (auburn hair, leather jacket)") == (
+        "Jules walked in.\nKnown appearances: Jules (auburn hair, leather jacket)"
+    )
+
+
+def test_caption_input_omits_known_appearances_when_absent():
+    # no character_notes (e.g. a chunk with no recognized characters) -
+    # must match what train_captioner.py's records look like for such rows,
+    # or a trained captioner sees an input shape it never saw in training
+    assert _caption_input("Rain fell on the empty street.", "") == "Rain fell on the empty street."
+
+
+def test_captioner_source_matches_training_format():
+    # this must stay byte-for-byte identical to train_captioner.py's
+    # to_examples() - see manga_pipeline/captioner.py's build_captioner_source
+    # docstring for why a mismatch here silently degrades captioner quality
+    # instead of erroring
+    source = build_captioner_source("Jules walked in.", ["Jules", "Priya"])
+    assert source == "caption: characters: Jules, Priya\nJules walked in."
+
+
+def test_captioner_source_uses_none_for_no_characters():
+    assert build_captioner_source("Rain fell.", []) == "caption: characters: none\nRain fell."
 
 
 def test_split_sentences_does_not_split_on_title_abbreviation():

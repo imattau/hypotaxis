@@ -220,6 +220,8 @@ function showNewStory() {
       <div class="status-line" id="f-prop-profiles-file-status"></div>
       <textarea id="f-prop-profiles" placeholder="Letter: a folded handwritten letter with a wax seal&#10;Key: a small tarnished brass key on a frayed ribbon" style="min-height:100px"></textarea>
       <div class="status-line">Small portable objects, not whole settings. Kept separate from locations — a prop's description is woven into the panel's prompt wherever it's mentioned, not used as an image reference like locations/characters.</div>
+      <label><input type="checkbox" id="f-use-captioner" style="width:auto;display:inline-block;margin-right:6px;" />Use trained captioner instead of the bridge LLM for panel captions</label>
+      <div class="status-line">Faster and lighter on VRAM, but only available once you've trained one (see README's "Curating a clean caption dataset"). Camera framing still uses the built-in heuristic either way.</div>
       <button class="btn" id="f-submit">Adapt Story (Stage A)</button>
       <div class="status-line" id="f-status"></div>
     </div>
@@ -283,6 +285,7 @@ async function submitNewStory() {
   const character_profiles = document.getElementById("f-profiles").value.trim();
   const location_profiles = document.getElementById("f-location-profiles").value.trim();
   const prop_profiles = document.getElementById("f-prop-profiles").value.trim();
+  const use_trained_captioner = document.getElementById("f-use-captioner").checked;
   const status = document.getElementById("f-status");
   const button = document.getElementById("f-submit");
 
@@ -300,7 +303,16 @@ async function submitNewStory() {
     const { job_id } = await api("/api/stories/adapt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, title, prose, style_prompt, character_profiles, location_profiles, prop_profiles }),
+      body: JSON.stringify({
+        id,
+        title,
+        prose,
+        style_prompt,
+        character_profiles,
+        location_profiles,
+        prop_profiles,
+        use_trained_captioner,
+      }),
     });
     pollAdaptJob(job_id, id, status, button);
   } catch (e) {

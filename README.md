@@ -152,16 +152,21 @@ honestly rather than papered over:
 - Cross-page character identity consistency (Stage B) is a real, visible improvement over
   text-only conditioning but not perfect — an anime-tuned IP-Adapter or per-character LoRA
   would likely close the remaining gap.
-- A LoRA-fine-tuned captioner (`train_captioner.py`, intended to shrink/replace the Stage A
-  bridge LLM) is implemented and trains on `data/caption_pairs_curated.jsonl`, a 2,000-example
+- A LoRA-fine-tuned captioner (`train_captioner.py`, `manga_pipeline/captioner.py`) is
+  implemented, trained, and wired into Stage A as an opt-in alternative to the bridge LLM for
+  panel captions. It trains on `data/caption_pairs_curated.jsonl`, a 2,000-example
   human-reviewed dataset built via `curate_dataset.py` (see "Curating a clean caption dataset"
   below). Default base model is `google-t5/t5-base`, chosen over `t5-small` after a direct
   comparison at the same dataset size showed a clear quality gap (eval loss 1.72 vs. 2.17,
   and t5-small visibly confusing subjects in multi-character sentences that t5-base got right).
-  It is not yet wired into Stage A's actual caption generation - that integration is still
-  outstanding. `data/caption_pairs.jsonl`, the older auto-harvested dataset that still grows
-  from normal Stage A use, remains unreviewed and untrusted for training (its targets are the
-  bridge LLM's own, sometimes-hallucinated output).
+  To use it: `python train_captioner.py --dataset data/caption_pairs_curated.jsonl` (writes
+  to `models/captioner/adapter` by default), then check "Use trained captioner" on the studio's
+  New Story form, or pass a `Captioner` instance to `adapt_story()` directly. The captioner only
+  replaces caption text - camera framing still uses the `guess_camera_hint()` keyword heuristic
+  in this path (the captioner was never trained to output it), and character descriptions still
+  go through the bridge LLM either way. `data/caption_pairs.jsonl`, the older auto-harvested
+  dataset that still grows from normal Stage A use, remains unreviewed and untrusted for
+  training (its targets are the bridge LLM's own, sometimes-hallucinated output).
 
 ## Curating a clean caption dataset
 

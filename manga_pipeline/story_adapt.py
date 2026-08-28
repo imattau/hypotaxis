@@ -7,6 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 
+from .captioner import Captioner
 from .layouts import LAYOUTS
 from .llm import SmallLLM, get_embedder
 from .registry import CharacterRegistry
@@ -704,6 +705,14 @@ def _append_jsonl(path: str | Path, record: dict) -> None:
             f.write(json.dumps(record) + "\n")
 
 
+def _caption_input(chunk: str, character_notes: str) -> str:
+    """The caption model's raw (unprefixed) input text - shared between
+    dataset harvesting (written as the {"input": ...} field a human later
+    reviews) and Captioner.generate() at inference time, so a trained
+    captioner sees text in exactly the same shape it was fine-tuned on."""
+    return f"{chunk}\nKnown appearances: {character_notes}" if character_notes else chunk
+
+
 def adapt_story(
     text: str,
     story_id: str,
@@ -719,11 +728,27 @@ def adapt_story(
     location_profiles: dict[str, str] | None = None,
     prop_registry: CharacterRegistry | None = None,
     prop_profiles: dict[str, str] | None = None,
+    captioner: "Captioner | None" = None,
 ) -> Story:
     """dataset_path: if given, append every {input, characters, target} caption
     example produced by the bridge LLM to this JSONL file (Phase 3 harvesting) -
     this is the training data collected across Phase 2 runs to eventually
     LoRA-fine-tune a small seq2seq model and shrink/replace the bridge LLM.
+    Ignored when captioner is given - harvesting is meant to capture the
+    bridge LLM's raw output for later human curation, not the trained
+    captioner's own output (which would be a pointless self-distillation
+    loop back into its own training data).
+
+    captioner: optional trained LoRA captioner (see manga_pipeline/captioner.py,
+    train_captioner.py) - when given, used instead of prompting the full
+    bridge LLM for each panel's caption. Much faster and lighter on VRAM
+    than an instruct-model prompt per panel, once a curated dataset exists
+    to train it from (see README's "Curating a clean caption dataset").
+    Camera framing still falls back to the guess_camera_hint() keyword
+    heuristic in this path, since the captioner was fine-tuned purely on
+    caption text and never saw the bridge LLM's two-line CAPTION/CAMERA
+    response format. Character descriptions still go through `llm` either
+    way - the captioner was never trained for that task.
 
     on_progress: optional callback invoked with a short human-readable status
     string as chunks are processed - purely cosmetic (e.g. for a UI progress
@@ -818,22 +843,26 @@ def adapt_story(
                 registry.set_description(name, description)
 
         character_notes = "; ".join(f"{name} ({registry.get(name).description})" for name in characters)
-        # kept as a separate prompt field rather than folded into the passage text -
-        # when it was part of "Passage", the tiny LLM tended to fixate on restating
-        # appearance instead of the scene's actual action (see caption quality notes)
-        raw_response = llm.generate(
-            _CAPTION_PROMPT.format(
-                chunk=chunk, characters=", ".join(characters) or "none", appearance_notes=character_notes or "none"
-            ),
-            max_new_tokens=80,
-        )
-        caption, camera_hint = _parse_caption_response(raw_response, chunk, len(characters))
-        if dataset_path is not None:
-            caption_input = f"{chunk}\nKnown appearances: {character_notes}" if character_notes else chunk
-            _append_jsonl(
-                dataset_path,
-                {"input": caption_input, "characters": characters, "target": caption},
+        caption_input = _caption_input(chunk, character_notes)
+        if captioner is not None:
+            caption = captioner.generate(caption_input, characters)
+            camera_hint = guess_camera_hint(chunk, len(characters))
+        else:
+            # kept as a separate prompt field rather than folded into the passage text -
+            # when it was part of "Passage", the tiny LLM tended to fixate on restating
+            # appearance instead of the scene's actual action (see caption quality notes)
+            raw_response = llm.generate(
+                _CAPTION_PROMPT.format(
+                    chunk=chunk, characters=", ".join(characters) or "none", appearance_notes=character_notes or "none"
+                ),
+                max_new_tokens=80,
             )
+            caption, camera_hint = _parse_caption_response(raw_response, chunk, len(characters))
+            if dataset_path is not None:
+                _append_jsonl(
+                    dataset_path,
+                    {"input": caption_input, "characters": characters, "target": caption},
+                )
 
         chunk_doc = get_nlp()(chunk) if ('"' in chunk or _THOUGHT_RE.search(chunk)) else None
         dialogue = split_dialogue(chunk, characters, default_speaker=last_speaker, doc=chunk_doc)
