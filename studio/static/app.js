@@ -117,8 +117,10 @@ async function loadReportSummaries(relays, targetIds) {
     const target = report.tags.find((tag) => tag[0] === "e")?.[1];
     if (!target || !targetIds.includes(target) || !label?.[1]) continue;
     const key = `${target}:${report.pubkey}:${label[1]}`;
-    if (!latestReports.has(key) || latestReports.get(key).created_at < report.created_at) {
-      latestReports.set(key, { target, reason: label[1], created_at: report.created_at });
+    const previous = latestReports.get(key);
+    if (!previous || report.created_at > previous.created_at ||
+        (report.created_at === previous.created_at && report.id > previous.id)) {
+      latestReports.set(key, { target, reason: label[1], created_at: report.created_at, id: report.id });
     }
   }
   for (const report of latestReports.values()) {
@@ -407,13 +409,30 @@ async function loadCompositions(holder) {
     }
     const grid = el(`<div class="grid"></div>`);
     for (const composition of compositions) {
-      const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.component_count} component(s)</div><div class="meta">${composition.community_merge ? "Community merge" : "Local composition"} · ${composition.evaluation_count ? `${composition.evaluation_count} evaluation record(s)` : "No evaluation records"}</div><div class="meta">${escapeHtml(composition.path)}</div><button class="btn secondary publish-composition" type="button">Publish to Nostr</button><div class="status-line composition-status"></div></div>`);
+      const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.component_count} component(s)</div><div class="meta">${composition.community_merge ? "Community merge" : "Local composition"} · ${composition.evaluation_count ? `${composition.evaluation_count} evaluation record(s)` : "No evaluation records"}</div><div class="meta">${escapeHtml(composition.path)}</div><button class="btn secondary publish-composition" type="button">Publish to Nostr</button><button class="btn secondary remove-composition" type="button">Remove</button><div class="status-line composition-status"></div></div>`);
       card.querySelector(".publish-composition").addEventListener("click", () => publishComposition(composition, card));
+      card.querySelector(".remove-composition").addEventListener("click", () => removeLocalComposition(composition, card));
       grid.appendChild(card);
     }
     holder.appendChild(grid);
   } catch (e) {
     holder.innerHTML = `<div class="section-title">Adapter Compositions</div><p class="status-line error">Could not load compositions: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function removeLocalComposition(composition, card) {
+  if (!confirm(`Remove composition ${composition.name} ${composition.version}?`)) return;
+  const button = card.querySelector(".remove-composition");
+  const status = card.querySelector(".composition-status");
+  button.disabled = true;
+  status.classList.remove("error");
+  try {
+    await api(`/api/adapters/compositions/${encodeURIComponent(composition.name)}/${encodeURIComponent(composition.version)}`, { method: "DELETE" });
+    await loadCompositions(document.getElementById("adapter-compositions"));
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
+    button.disabled = false;
   }
 }
 
@@ -491,7 +510,10 @@ async function discoverAdapters(event) {
       const dTag = release.event.tags.find((tag) => tag[0] === "d")?.[1] || `adapter:${release.manifest.name}`;
       const key = `${release.creator_pubkey}:${dTag}`;
       const previous = newestReleases.get(key);
-      if (!previous || release.event.created_at > previous.event.created_at) newestReleases.set(key, release);
+      if (!previous || release.event.created_at > previous.event.created_at ||
+          (release.event.created_at === previous.event.created_at && release.event.id > previous.event.id)) {
+        newestReleases.set(key, release);
+      }
     }
     releases = [...newestReleases.values()];
     if (releases.length) {
@@ -521,7 +543,11 @@ async function discoverAdapters(event) {
         const value = Number(label?.[1]?.split("/")[0]);
         if (!target || !Number.isInteger(value) || value < 1 || value > 5) continue;
         const key = `${target}:${rating.pubkey}`;
-        if (!latestRatings.has(key) || latestRatings.get(key).created_at < rating.created_at) latestRatings.set(key, { target, value, created_at: rating.created_at });
+        const previous = latestRatings.get(key);
+        if (!previous || rating.created_at > previous.created_at ||
+            (rating.created_at === previous.created_at && rating.id > previous.id)) {
+          latestRatings.set(key, { target, value, created_at: rating.created_at, id: rating.id });
+        }
       }
       const aggregates = new Map();
       for (const item of latestRatings.values()) {
@@ -582,7 +608,10 @@ async function discoverAdapters(event) {
         const dTag = event.tags.find((tag) => tag[0] === "d")?.[1] || `composition:${composition.name}`;
         const key = `${event.pubkey}:${dTag}`;
         const previous = compositions.get(key);
-        if (!previous || event.created_at > previous.event.created_at) compositions.set(key, { event, composition });
+        if (!previous || event.created_at > previous.event.created_at ||
+            (event.created_at === previous.event.created_at && event.id > previous.event.id)) {
+          compositions.set(key, { event, composition });
+        }
       } catch (_) {
         // Ignore malformed composition events without interrupting release discovery.
       }
@@ -612,7 +641,11 @@ async function discoverAdapters(event) {
         const value = Number(label?.[1]?.split("/")[0]);
         if (!target || !Number.isInteger(value) || value < 1 || value > 5) continue;
         const key = `${target}:${rating.pubkey}`;
-        if (!compositionRatings.has(key) || compositionRatings.get(key).created_at < rating.created_at) compositionRatings.set(key, { target, value, created_at: rating.created_at });
+        const previous = compositionRatings.get(key);
+        if (!previous || rating.created_at > previous.created_at ||
+            (rating.created_at === previous.created_at && rating.id > previous.id)) {
+          compositionRatings.set(key, { target, value, created_at: rating.created_at, id: rating.id });
+        }
       }
       const compositionAggregates = new Map();
       for (const item of compositionRatings.values()) {

@@ -193,6 +193,9 @@ picks it up automatically once `use_character_lora` is turned on
 before). Camera framing and character descriptions are unaffected either way - the LoRA only
 ever influences the panel's rendered likeness.
 
+When training metadata is imported into a distributable adapter manifest, these reproducibility
+fields are validated so malformed run provenance cannot be published silently.
+
 Default step count (300) was chosen from a real comparison, not guessed: 250 and 500 steps were
 both trained end-to-end on real story characters and compared against the IP-Adapter-only
 baseline across three different scenes/seeds each. Both step counts produced a visibly more
@@ -476,6 +479,10 @@ examples by hand isn't practical to redo per dataset change. All 2,010 candidate
 the automated gate's quality bar turns out not to be enough. The previous hand-reviewed
 (caption-only, no camera field) dataset is recoverable from git history (the commit that added
 it), and the prior captioner adapter is kept locally at `models/captioner_precamera_backup/`
+
+For reproducible adapter evaluations, `evaluate_adapter.py` accepts
+`--dataset-file` and records the file's SHA-256 digest in each evaluation
+record. Use `--dataset-sha256` when the shared corpus is stored elsewhere.
 (gitignored, not in version control) for a quick rollback.
 
 ## Repository layout

@@ -50,10 +50,19 @@ def validate_training_metadata(training: Any) -> None:
         raise ValueError("training.rank must be a positive integer")
     if "dataset" in training and (not isinstance(training["dataset"], str) or not training["dataset"].strip()):
         raise ValueError("training.dataset must be a non-empty string")
+    if "base_model" in training and (not isinstance(training["base_model"], str) or not training["base_model"].strip()):
+        raise ValueError("training.base_model must be a non-empty string")
     if "dataset_sha256" in training:
         _require_sha256(training["dataset_sha256"], "training.dataset_sha256")
     if "examples" in training and (not isinstance(training["examples"], int) or isinstance(training["examples"], bool) or training["examples"] < 0):
         raise ValueError("training.examples must be a non-negative integer")
+    for field in ("steps", "resolution"):
+        if field in training and (not isinstance(training[field], int) or isinstance(training[field], bool) or training[field] <= 0):
+            raise ValueError(f"training.{field} must be a positive integer")
+    if "learning_rate" in training and (not isinstance(training["learning_rate"], (int, float)) or isinstance(training["learning_rate"], bool) or training["learning_rate"] <= 0):
+        raise ValueError("training.learning_rate must be positive")
+    if "seed" in training and (not isinstance(training["seed"], int) or isinstance(training["seed"], bool)):
+        raise ValueError("training.seed must be an integer")
 
 
 def validate_evaluations(evaluations: Any) -> None:

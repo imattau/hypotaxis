@@ -69,6 +69,20 @@ def test_training_metadata_validates_reproducibility_fields():
         validate_training_metadata({"rank": 0})
     with pytest.raises(ValueError, match="dataset_sha256"):
         validate_training_metadata({"dataset_sha256": "not-a-digest"})
+    with pytest.raises(ValueError, match="training.steps"):
+        validate_training_metadata({"steps": 0})
+    with pytest.raises(ValueError, match="learning_rate"):
+        validate_training_metadata({"learning_rate": 0})
+    with pytest.raises(ValueError, match="seed"):
+        validate_training_metadata({"seed": True})
+
+
+def test_training_metadata_accepts_character_lora_reproducibility_fields():
+    validate_training_metadata({
+        "method": "character-lora", "base_model": "sdxl", "rank": 8,
+        "steps": 300, "learning_rate": 1e-4, "resolution": 1024,
+        "examples": 8, "seed": 23,
+    })
 
 
 def test_manifest_accepts_training_metadata():

@@ -32,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--training-examples", type=int, default=None, help="number of training examples")
     parser.add_argument("--training-metadata-json", type=Path, default=None, help="JSON object containing existing training metadata, such as training-metadata.json")
     parser.add_argument("--evaluations-json", type=Path, default=None, help="JSON file containing an evaluation-record array")
+    parser.add_argument("--evaluation-dataset-file", type=Path, default=None, help="corpus file to fingerprint and attach to imported evaluations")
     args = parser.parse_args(argv)
 
     distribution = {}
@@ -74,7 +75,23 @@ def main(argv: list[str] | None = None) -> int:
     training.update({key: value for key, value in training_values.items() if value is not None})
     evaluations = None
     if args.evaluations_json is not None:
-        evaluations = json.loads(args.evaluations_json.read_text(encoding="utf-8"))
+        try:
+            evaluations = json.loads(args.evaluations_json.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            parser.error(f"could not read evaluations: {exc}")
+    if args.evaluation_dataset_file is not None:
+        if not args.evaluation_dataset_file.is_file():
+            parser.error(f"evaluation dataset file does not exist: {args.evaluation_dataset_file}")
+        if not isinstance(evaluations, list):
+            parser.error("--evaluation-dataset-file requires --evaluations-json")
+        evaluation_digest = sha256_file(args.evaluation_dataset_file)
+        for evaluation in evaluations:
+            if not isinstance(evaluation, dict):
+                parser.error("evaluation records must be objects")
+            existing_digest = evaluation.get("dataset_sha256")
+            if existing_digest is not None and existing_digest != evaluation_digest:
+                parser.error("evaluation dataset digest does not match --evaluation-dataset-file")
+            evaluation["dataset_sha256"] = evaluation_digest
     manifest = build_manifest(
         args.source,
         name=args.name,

@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 from package_adapter import main
@@ -89,6 +90,25 @@ def test_package_adapter_reads_evaluation_records(tmp_path):
 
     manifest = json.loads((tmp_path / "release" / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["evaluations"][0]["score"] == 0.84
+
+
+def test_package_adapter_fingerprints_imported_evaluations(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "adapter_model.safetensors").write_bytes(b"weights")
+    evaluations = tmp_path / "evaluations.json"
+    evaluations.write_text(json.dumps([{"name": "heldout", "dataset": "corpus-v1", "score": 0.84}]), encoding="utf-8")
+    dataset = tmp_path / "corpus.jsonl"
+    dataset.write_text('{"text":"caption"}\n', encoding="utf-8")
+
+    main([
+        str(source), str(tmp_path / "release"), "--name", "grounding", "--version", "1.0.0",
+        "--base-model", "base", "--license", "MIT", "--evaluations-json", str(evaluations),
+        "--evaluation-dataset-file", str(dataset),
+    ])
+
+    manifest = json.loads((tmp_path / "release" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["evaluations"][0]["dataset_sha256"] == hashlib.sha256(dataset.read_bytes()).hexdigest()
 
 
 def test_package_adapter_fingerprints_training_dataset_file(tmp_path):

@@ -30,6 +30,7 @@ from manga_pipeline.adapter_distribution import (
     download_from_mirrors,
     file_blossom_urls,
     install_from_blossom,
+    install_from_torrent,
     mirror_blob,
     upload_blob,
     upload_bundle_to_servers,
@@ -539,6 +540,17 @@ def test_install_from_blossom_does_not_leave_partial_bundle(tmp_path):
     assert list((tmp_path / "installed").glob(".adapter-install-*")) == []
 
 
+def test_install_from_torrent_does_not_leave_partial_bundle(tmp_path, monkeypatch):
+    def failed_download(_magnet, destination, _manifest, **_kwargs):
+        (destination / "partial").mkdir()
+        raise ValueError("download verification failed")
+
+    monkeypatch.setattr("manga_pipeline.adapter_distribution.download_torrent", failed_download)
+    with pytest.raises(ValueError, match="download verification failed"):
+        install_from_torrent("magnet:?xt=urn:btih:abc", _manifest(), tmp_path / "installed")
+    assert list((tmp_path / "installed").glob(".torrent-install-*")) == []
+
+
 def test_torrent_backend_availability_contract(tmp_path):
     if not torrent_available():
         with pytest.raises(TorrentUnavailableError, match="libtorrent"):
@@ -621,10 +633,19 @@ def test_composition_accepts_valid_evaluation_records_and_rejects_bad_scores():
         "1.0.0",
         "base",
         [component],
-        evaluations=[{"name": "heldout", "dataset": "corpus-v1", "score": 0.82}],
+        evaluations=[{"name": "heldout", "dataset": "corpus-v1", "dataset_sha256": "b" * 64, "score": 0.82}],
         community_merge=True,
     )
     assert gated["community_merge"] is True
+    with pytest.raises(ValueError, match="dataset_sha256"):
+        build_composition(
+            "combined",
+            "1.0.0",
+            "base",
+            [component],
+            evaluations=[{"name": "heldout", "dataset": "corpus-v1", "score": 0.82}],
+            community_merge=True,
+        )
 
 
 def test_build_composition_event_preserves_lineage_and_evaluation_content():

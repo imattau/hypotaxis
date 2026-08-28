@@ -31,7 +31,8 @@ with write access to that repository before using tagged releases.
 Pushes to `master`, feature branches, tags beginning with `v`, and pull
 requests trigger the workflow. The generated artifact is a platform-native
 PyInstaller application; it should be tested on the target operating system
-before release.
+before release. Tagged GitHub releases also include a `SHA256SUMS` manifest
+covering every downloaded build and package artifact.
 
 Windows users also need a supported Microsoft WebView2 Runtime installed on
 the target machine. Linux users need the Qt or GTK native libraries required by

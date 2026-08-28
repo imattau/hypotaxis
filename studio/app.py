@@ -646,6 +646,26 @@ def list_adapter_compositions():
     return {"compositions": compositions}
 
 
+@app.delete("/api/adapters/compositions/{name}/{version}")
+def remove_local_composition(name: str, version: str):
+    """Remove one locally created composition manifest."""
+
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", name) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", version):
+        raise HTTPException(400, "invalid composition name or version")
+    composition = (MODELS_DIR / "shared_adapters" / "compositions" / f"{name}-{version}.json").resolve()
+    try:
+        composition.relative_to((MODELS_DIR / "shared_adapters" / "compositions").resolve())
+    except ValueError as exc:
+        raise HTTPException(400, "invalid composition path") from exc
+    if not composition.is_file():
+        raise HTTPException(404, "local composition not found")
+    try:
+        composition.unlink()
+    except OSError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"removed": True, "name": name, "version": version}
+
+
 @app.post("/api/adapters/discover")
 def discover_adapters(req: DiscoverAdaptersRequest):
     """Discover Hypotaxis release metadata from configured Nostr relays."""
@@ -802,13 +822,22 @@ def install_composition(req: InstallCompositionRequest):
             raise ValueError("composition components target incompatible base models")
         installed = []
         for manifest in manifests:
-            if manifest.get("distribution", {}).get("blossom"):
-                target = install_from_blossom(manifest, MODELS_DIR / "shared_adapters")
-            else:
-                magnet = manifest.get("distribution", {}).get("torrent", {}).get("magnet")
-                if not magnet:
-                    raise ValueError(f"component {manifest['name']} has no Blossom source or torrent magnet")
+            distribution = manifest.get("distribution", {})
+            blossom_sources = distribution.get("blossom")
+            magnet = distribution.get("torrent", {}).get("magnet")
+            if blossom_sources:
+                try:
+                    target = install_from_blossom(manifest, MODELS_DIR / "shared_adapters")
+                except (OSError, RuntimeError, ValueError):
+                    if not magnet:
+                        raise
+                    # A failed mirror should not prevent a composition from
+                    # using its independently advertised BitTorrent source.
+                    target = install_from_torrent(magnet, manifest, MODELS_DIR / "shared_adapters")
+            elif magnet:
                 target = install_from_torrent(magnet, manifest, MODELS_DIR / "shared_adapters")
+            else:
+                raise ValueError(f"component {manifest['name']} has no Blossom source or torrent magnet")
             installed_targets.append(target)
             installed.append(str(target.relative_to(ROOT)))
     except FileExistsError:

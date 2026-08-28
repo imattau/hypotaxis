@@ -606,6 +606,9 @@ def validate_composition(composition: dict[str, Any]) -> None:
         raise ValueError("composition community_merge must be a boolean")
     if composition.get("community_merge") and not composition.get("evaluations"):
         raise ValueError("community merges require at least one evaluation record")
+    if composition.get("community_merge"):
+        if not all(isinstance(evaluation.get("dataset_sha256"), str) for evaluation in composition["evaluations"]):
+            raise ValueError("community merge evaluations require dataset_sha256")
 
 
 def build_composition(

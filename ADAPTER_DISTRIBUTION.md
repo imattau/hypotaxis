@@ -139,6 +139,9 @@ installation.
 In the Studio browser, a failed BitTorrent download automatically falls back
 to the release's advertised Blossom mirrors when available. The fallback uses
 the same signed release event and verified, atomic Blossom installation path.
+Composition installs apply the inverse fallback as well: when a component
+advertises both transports and its Blossom mirrors fail, Studio tries its
+verified BitTorrent magnet before aborting the composition transaction.
 
 The registry should preserve adapter lineage and evaluation results. A merged
 community adapter must identify its source adapters and weights, while the
@@ -153,7 +156,8 @@ Studio exposes `POST /api/adapters/composition` to create these manifests from
 local bundles. It refuses mismatched base models and retains each source
 manifest digest so a composition can be audited or reversed later.
 Compositions can be marked as `community_merge`; that flag requires at least
-one validated evaluation record, preventing an evaluation-free merge from
+one validated evaluation record with a SHA-256 digest for the evaluated
+dataset. This prevents an evaluation-free or non-reproducible merge from
 being presented as a community release. Local compositions remain opt-in and
 may omit the flag and evaluations.
 Studio can publish a composition as a signed Nostr kind-30079 event. The event
