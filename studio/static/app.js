@@ -402,6 +402,7 @@ async function discoverAdapters(event) {
   results.innerHTML = "";
   try {
     const events = await nostrPool.querySync(relays, { kinds: [30078], limit: 20 });
+    const compositionEvents = await nostrPool.querySync(relays, { kinds: [30079], limit: 20 });
     let releases = events
       .filter((release) => verifyEvent(release))
       .map((release) => {
@@ -455,10 +456,7 @@ async function discoverAdapters(event) {
       });
     }
     status.textContent = `${releases.length} verified release(s) found.`;
-    if (releases.length === 0) {
-      results.innerHTML = "<p class='empty-state'>No Hypotaxis releases found.</p>";
-      return;
-    }
+    if (releases.length === 0) results.innerHTML = "<p class='empty-state'>No Hypotaxis releases found.</p>";
     for (const release of releases) {
       const manifest = release.manifest;
       const localVersion = localAdapterVersions.get(manifest.name);
@@ -493,10 +491,55 @@ async function discoverAdapters(event) {
       card.querySelector(".rate-release").addEventListener("click", () => rateRelease(release, card.querySelector(".rate-release")));
       results.appendChild(card);
     }
+    const compositions = new Map();
+    const releasesByComponent = new Map(releases.map((release) => [`${release.manifest.name}@${release.manifest.version}`, release]));
+    for (const event of compositionEvents.filter((candidate) => verifyEvent(candidate))) {
+      try {
+        const composition = JSON.parse(event.content);
+        if (composition.schema !== "hypotaxis.adapter-composition.v1" || !Array.isArray(composition.components) || !composition.components.length) continue;
+        const dTag = event.tags.find((tag) => tag[0] === "d")?.[1] || `composition:${composition.name}`;
+        const key = `${event.pubkey}:${dTag}`;
+        const previous = compositions.get(key);
+        if (!previous || event.created_at > previous.event.created_at) compositions.set(key, { event, composition });
+      } catch (_) {
+        // Ignore malformed composition events without interrupting release discovery.
+      }
+    }
+    if (compositions.size) {
+      results.appendChild(el("<div class='section-title'>Community Compositions</div>"));
+      for (const { event, composition } of compositions.values()) {
+        const componentReleases = composition.components.map((component) => releasesByComponent.get(`${component.name}@${component.version}`));
+        const installable = componentReleases.length === composition.components.length && componentReleases.every((release) => Array.isArray(release?.manifest.distribution?.blossom) && release.manifest.distribution.blossom.length);
+        const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.components.length} component(s)</div><div class="meta">${composition.community_merge ? "Community merge" : "Composition"} · ${Array.isArray(composition.evaluations) ? composition.evaluations.length : 0} evaluation record(s)</div><div class="meta">Creator: ${escapeHtml(event.pubkey.slice(0, 16))}... · Event: ${escapeHtml(event.id.slice(0, 16))}...</div>${installable ? `<button class="btn secondary install-composition" type="button">Install Components</button>` : ""}<div class="status-line composition-install-status"></div></div>`);
+        if (installable) card.querySelector(".install-composition").addEventListener("click", () => installRemoteComposition(composition, componentReleases, card));
+        results.appendChild(card);
+      }
+    }
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
   } finally {
+    button.disabled = false;
+  }
+}
+
+async function installRemoteComposition(composition, releases, card) {
+  const button = card.querySelector(".install-composition");
+  const status = card.querySelector(".composition-install-status");
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Verifying and installing components...";
+  try {
+    const result = await api("/api/adapters/composition/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ composition, release_events: releases.map((release) => release.event) }),
+    });
+    status.textContent = `Installed ${result.installed.length} component(s).`;
+    button.remove();
+  } catch (error) {
+    status.textContent = "Install failed: " + error.message;
+    status.classList.add("error");
     button.disabled = false;
   }
 }

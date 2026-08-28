@@ -85,6 +85,9 @@ resulting bundle before returning. The rest of Hypotaxis remains usable when
 can fall back to Blossom mirrors.
 `TorrentSeeder` is an explicit opt-in long-lived session for keeping a
 completed bundle available to peers; downloading alone does not start seeding.
+Studio persists only explicit seeding choices in
+`models/shared_adapters/.seeding.json` and restores those choices on startup;
+the application lifespan closes active sessions cleanly on shutdown.
 Studio exposes Start/Stop Seeding controls for verified local bundles and
 reports the active seeder's peer and upload-rate state.
 Torrent downloads initiated by Studio also require the signed release event and
@@ -130,6 +133,10 @@ Studio can publish a composition as a signed Nostr kind-30079 event. The event
 content contains the complete composition, including component manifest
 digests, weights, lineage, and evaluation evidence, so other clients can audit
 the merge before reconstructing it locally.
+Community Discovery also shows verified remote compositions and offers
+component installation when every referenced adapter release is present with a
+Blossom source. The server verifies all signed release events and lineage
+digests before downloading any component.
 
 Adapter manifests may also include a `training` object with reproducibility
 fields such as `method`, `rank`, `dataset`, `dataset_sha256`, and `examples`.

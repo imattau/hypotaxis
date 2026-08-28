@@ -40,10 +40,18 @@ class TorrentUnavailableError(RuntimeError):
 class TorrentSeeder:
     """Opt-in libtorrent session that keeps completed bundles seeding."""
 
-    def __init__(self, *, libtorrent_module=None):
+    def __init__(self, *, libtorrent_module=None, persistence_path: str | Path | None = None):
         self._libtorrent = libtorrent_module or _load_libtorrent()
         self._session = self._libtorrent.session()
         self._handles: dict[str, Any] = {}
+        self._persistence_path = Path(persistence_path) if persistence_path is not None else None
+
+    def _save_specs(self) -> None:
+        if self._persistence_path is None:
+            return
+        self._persistence_path.parent.mkdir(parents=True, exist_ok=True)
+        specs = getattr(self, "_specs", {})
+        self._persistence_path.write_text(json.dumps(specs, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
     def start(self, seed_id: str, bundle_dir: str | Path, *, torrent_path: str | Path | None = None, magnet: str | None = None) -> dict[str, Any]:
         if not isinstance(seed_id, str) or not seed_id:
@@ -60,7 +68,34 @@ class TorrentSeeder:
         else:
             handle = self._libtorrent.add_magnet_uri(self._session, magnet, {"save_path": str(bundle_dir.parent)})
         self._handles[seed_id] = handle
+        if self._persistence_path is not None:
+            if not hasattr(self, "_specs"):
+                self._specs = {}
+            self._specs[seed_id] = {"bundle_dir": str(bundle_dir), "torrent_path": str(Path(torrent_path).resolve()) if torrent_path is not None else None, "magnet": magnet}
+            self._save_specs()
         return self.status(seed_id)
+
+    def restore(self) -> list[dict[str, Any]]:
+        """Restore previously opted-in seeds, reporting skips and failures."""
+
+        if self._persistence_path is None or not self._persistence_path.is_file():
+            return []
+        try:
+            specs = json.loads(self._persistence_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("invalid torrent seeding state") from exc
+        if not isinstance(specs, dict):
+            raise ValueError("torrent seeding state must be an object")
+        self._specs = specs
+        results = []
+        for seed_id, spec in specs.items():
+            if not isinstance(spec, dict):
+                continue
+            try:
+                results.append(self.start(seed_id, spec["bundle_dir"], torrent_path=spec.get("torrent_path"), magnet=spec.get("magnet")))
+            except (OSError, RuntimeError, ValueError, KeyError) as exc:
+                results.append({"seed_id": seed_id, "seeding": False, "error": str(exc)})
+        return results
 
     def status(self, seed_id: str) -> dict[str, Any]:
         handle = self._handles.get(seed_id)
@@ -71,6 +106,9 @@ class TorrentSeeder:
     def stop(self, seed_id: str) -> None:
         handle = self._handles.pop(seed_id)
         self._session.remove_torrent(handle)
+        if hasattr(self, "_specs"):
+            self._specs.pop(seed_id, None)
+            self._save_specs()
 
     def close(self) -> None:
         for seed_id in list(self._handles):
@@ -197,6 +235,19 @@ def build_composition_event(composition: dict[str, Any], pubkey: str, created_at
     }
     event["id"] = nostr_event_id(event)
     return event
+
+
+def parse_composition_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Validate and extract a composition from a signed kind-30079 event."""
+
+    validate_signed_event(event)
+    if event["kind"] != NOSTR_COMPOSITION_KIND:
+        raise ValueError("event is not a Hypotaxis adapter composition")
+    composition = json.loads(event["content"])
+    if not isinstance(composition, dict):
+        raise ValueError("composition event content must contain an object")
+    validate_composition(composition)
+    return composition
 
 
 def parse_release_event(event: dict[str, Any]) -> dict[str, Any]:

@@ -195,6 +195,65 @@ def test_install_adapter_rejects_invalid_signature(monkeypatch):
         studio_app.install_adapter(studio_app.InstallAdapterRequest(manifest=manifest, release_event=event))
 
 
+def test_install_composition_installs_verified_components(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio_app, "ROOT", tmp_path)
+    monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "style", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    from manga_pipeline.adapter_distribution import build_composition, build_release_event, manifest_digest
+
+    event = build_release_event(manifest, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    composition = build_composition(
+        "community", "1.0.0", "base",
+        [{"name": "style", "version": "1.0.0", "manifest_sha256": manifest_digest(manifest), "weight": 1.0}],
+    )
+    installed = tmp_path / "models" / "shared_adapters" / "style-1.0.0"
+    monkeypatch.setattr(studio_app, "install_from_blossom", lambda _manifest, _root: installed)
+    result = studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, release_events=[event]))
+    assert result == {"installed": ["models/shared_adapters/style-1.0.0"], "composition": "community"}
+
+
+def test_install_composition_rolls_back_components_after_later_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio_app, "ROOT", tmp_path)
+    monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    from manga_pipeline.adapter_distribution import build_composition, build_release_event, manifest_digest
+
+    manifests = []
+    events = []
+    for name in ("style", "format"):
+        manifest = {
+            "schema": "hypotaxis.adapter.v1", "name": name, "version": "1.0.0", "base_model": "base", "license": "MIT",
+            "files": [{"path": "x.bin", "sha256": "a" * 64}],
+        }
+        manifests.append(manifest)
+        event = build_release_event(manifest, "1" * 64, 123)
+        event["sig"] = "2" * 128
+        events.append(event)
+    composition = build_composition("community", "1.0.0", "base", [
+        {"name": m["name"], "version": m["version"], "manifest_sha256": manifest_digest(m), "weight": 1.0} for m in manifests
+    ])
+    first = tmp_path / "models" / "shared_adapters" / "style-1.0.0"
+    calls = 0
+
+    def install(_manifest, _root):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            first.mkdir(parents=True)
+            return first
+        raise OSError("mirror unavailable")
+
+    monkeypatch.setattr(studio_app, "install_from_blossom", install)
+    with pytest.raises(studio_app.HTTPException, match="mirror unavailable"):
+        studio_app.install_composition(studio_app.InstallCompositionRequest(composition=composition, release_events=events))
+    assert not first.exists()
+
+
 def test_upload_adapter_endpoint_verifies_bundle_and_uploads_each_file(tmp_path, monkeypatch):
     monkeypatch.setattr(studio_app, "ROOT", tmp_path)
     monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")

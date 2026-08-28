@@ -36,6 +36,7 @@ from manga_pipeline.adapter_distribution import (
     download_torrent,
     torrent_available,
     manifest_digest,
+    parse_composition_event,
     nostr_event_id,
     parse_release_event,
     query_nostr_relays,
@@ -569,9 +570,15 @@ def test_build_composition_event_preserves_lineage_and_evaluation_content():
         evaluations=[{"name": "heldout", "dataset": "corpus-v1", "score": 0.82}],
     )
     event = build_composition_event(composition, "1" * 64, 123)
+    event["sig"] = "2" * 128
     assert event["kind"] == NOSTR_COMPOSITION_KIND
     assert json.loads(event["content"]) == composition
     assert [tag for tag in event["tags"] if tag[0] == "t"] == [["t", "hypotaxis-adapter-composition"]]
+    assert parse_composition_event(event) == composition
+    event["kind"] = NOSTR_RELEASE_KIND
+    event["id"] = nostr_event_id(event)
+    with pytest.raises(ValueError, match="composition"):
+        parse_composition_event(event)
 
 
 def test_composition_rejects_duplicate_components_and_bad_weights():
@@ -733,9 +740,14 @@ def test_torrent_seeder_keeps_opt_in_handle_and_reports_status(tmp_path):
 
     bundle = tmp_path / "bundle"
     bundle.mkdir()
-    seeder = TorrentSeeder(libtorrent_module=FakeLibtorrent())
+    state = tmp_path / "seeding.json"
+    seeder = TorrentSeeder(libtorrent_module=FakeLibtorrent(), persistence_path=state)
     result = seeder.start("grounding-1.0.0", bundle, magnet="magnet:?xt=urn:btih:abc")
     assert result["seed_id"] == "grounding-1.0.0"
     assert result["seeding"] is True
+    assert json.loads(state.read_text())["grounding-1.0.0"]["magnet"] == "magnet:?xt=urn:btih:abc"
+    restored = TorrentSeeder(libtorrent_module=FakeLibtorrent(), persistence_path=state)
+    assert restored.restore()[0]["seed_id"] == "grounding-1.0.0"
     seeder.stop("grounding-1.0.0")
     assert len(seeder._session.removed) == 1
+    assert json.loads(state.read_text()) == {}

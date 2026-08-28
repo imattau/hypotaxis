@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import asynccontextmanager
 from dataclasses import asdict
 from pathlib import Path
 
@@ -73,8 +74,23 @@ DATASET_PATH = ROOT / "data" / "caption_pairs.jsonl"
 CAPTIONER_ADAPTER_DIR = ROOT / "models" / "captioner" / "adapter"
 CAPTIONER_BASE_MODEL = "google-t5/t5-base"
 MODELS_DIR = ROOT / "models"
+SEED_STATE_PATH = MODELS_DIR / "shared_adapters" / ".seeding.json"
 
-app = FastAPI(title="Manga Production Studio")
+@asynccontextmanager
+async def lifespan(_app):
+    """Restore explicit seed choices and close the session on shutdown."""
+
+    global _torrent_seeder
+    if torrent_available():
+        _torrent_seeder = TorrentSeeder(persistence_path=SEED_STATE_PATH)
+        _torrent_seeder.restore()
+    yield
+    if _torrent_seeder is not None:
+        _torrent_seeder.close()
+        _torrent_seeder = None
+
+
+app = FastAPI(title="Manga Production Studio", lifespan=lifespan)
 app.mount("/output", StaticFiles(directory=str(OUTPUT_DIR), check_dir=False), name="output")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 
@@ -218,6 +234,11 @@ class DiscoverAdaptersRequest(BaseModel):
 class InstallAdapterRequest(BaseModel):
     manifest: dict
     release_event: dict
+
+
+class InstallCompositionRequest(BaseModel):
+    composition: dict
+    release_events: list[dict]
 
 
 class UploadAdapterRequest(BaseModel):
@@ -454,7 +475,7 @@ def seed_adapter(req: SeedAdapterRequest):
         raise HTTPException(503, "BitTorrent support is unavailable; install libtorrent")
     try:
         if _torrent_seeder is None:
-            _torrent_seeder = TorrentSeeder()
+            _torrent_seeder = TorrentSeeder(persistence_path=SEED_STATE_PATH)
         return _torrent_seeder.start(f"{req.name}-{req.version}", bundle, torrent_path=torrent if torrent.is_file() else None, magnet=magnet)
     except (OSError, RuntimeError, ValueError, KeyError) as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -611,6 +632,47 @@ def install_adapter(req: InstallAdapterRequest):
     except (OSError, RuntimeError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"installed": True, "bundle_dir": str(target.relative_to(ROOT))}
+
+
+@app.post("/api/adapters/composition/install")
+def install_composition(req: InstallCompositionRequest):
+    """Install every verified Blossom component referenced by a composition."""
+
+    installed_targets = []
+    try:
+        from manga_pipeline.adapter_distribution import validate_composition
+
+        validate_composition(req.composition)
+        events_by_component = {}
+        for event in req.release_events:
+            manifest = parse_release_event(event)
+            _validate_release_for_manifest(manifest, event)
+            events_by_component[(manifest["name"], manifest["version"])] = (manifest, event)
+        manifests = []
+        for component in req.composition["components"]:
+            key = (component["name"], component["version"])
+            if key not in events_by_component:
+                raise ValueError(f"missing signed release for {component['name']}@{component['version']}")
+            manifest, _event = events_by_component[key]
+            if manifest_digest(manifest) != component["manifest_sha256"]:
+                raise ValueError(f"manifest digest mismatch for {component['name']}@{component['version']}")
+            manifests.append(manifest)
+        if len({manifest["base_model"] for manifest in manifests}) != 1 or manifests[0]["base_model"] != req.composition["base_model"]:
+            raise ValueError("composition components target incompatible base models")
+        installed = []
+        for manifest in manifests:
+            target = install_from_blossom(manifest, MODELS_DIR / "shared_adapters")
+            installed_targets.append(target)
+            installed.append(str(target.relative_to(ROOT)))
+    except FileExistsError:
+        for target in installed_targets:
+            shutil.rmtree(target, ignore_errors=True)
+        raise HTTPException(409, "a composition component is already installed")
+    except (OSError, RuntimeError, ValueError) as exc:
+        for target in installed_targets:
+            shutil.rmtree(target, ignore_errors=True)
+        raise HTTPException(400, str(exc)) from exc
+    return {"installed": installed, "composition": req.composition["name"]}
 
 
 @app.get("/api/adapters/local")
