@@ -227,11 +227,15 @@ def build_composition_event(composition: dict[str, Any], pubkey: str, created_at
     _hex(pubkey, 64, "pubkey")
     if not isinstance(created_at, int) or created_at < 0:
         raise ValueError("created_at must be a non-negative integer")
+    component_tags = [
+        ["component", f"{component['name']}@{component['version']}", component["manifest_sha256"], str(component["weight"])]
+        for component in composition["components"]
+    ]
     event = {
         "pubkey": pubkey,
         "created_at": created_at,
         "kind": NOSTR_COMPOSITION_KIND,
-        "tags": [["d", f"composition:{composition['name']}"], ["version", composition["version"]], ["base-model", composition["base_model"]], ["t", "hypotaxis-adapter-composition"]],
+        "tags": [["d", f"composition:{composition['name']}"], ["version", composition["version"]], ["base-model", composition["base_model"]], ["t", "hypotaxis-adapter-composition"], *component_tags],
         "content": canonical_json(composition).decode("utf-8"),
     }
     event["id"] = nostr_event_id(event)
@@ -248,6 +252,14 @@ def parse_composition_event(event: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(composition, dict):
         raise ValueError("composition event content must contain an object")
     validate_composition(composition)
+    tagged_components = [tag for tag in event.get("tags", []) if isinstance(tag, list) and tag and tag[0] == "component"]
+    if tagged_components:
+        expected_components = [
+            ["component", f"{component['name']}@{component['version']}", component["manifest_sha256"], str(component["weight"])]
+            for component in composition["components"]
+        ]
+        if tagged_components != expected_components:
+            raise ValueError("composition component tags do not match content")
     return composition
 
 

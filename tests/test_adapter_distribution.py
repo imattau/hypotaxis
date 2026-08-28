@@ -661,8 +661,19 @@ def test_build_composition_event_preserves_lineage_and_evaluation_content():
     assert event["kind"] == NOSTR_COMPOSITION_KIND
     assert json.loads(event["content"]) == composition
     assert [tag for tag in event["tags"] if tag[0] == "t"] == [["t", "hypotaxis-adapter-composition"]]
+    assert [tag for tag in event["tags"] if tag[0] == "component"] == [["component", "style@1.0.0", "a" * 64, "1.0"]]
     assert parse_composition_event(event) == composition
     event["kind"] = NOSTR_RELEASE_KIND
+
+
+def test_parse_composition_event_rejects_mismatched_component_tags():
+    composition = build_composition("combined", "1.0.0", "base", [{"name": "style", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}])
+    event = build_composition_event(composition, "1" * 64, 123)
+    event["sig"] = "2" * 128
+    event["tags"][-1][1] = "other@1.0.0"
+    event["id"] = nostr_event_id(event)
+    with pytest.raises(ValueError, match="component tags"):
+        parse_composition_event(event)
     event["id"] = nostr_event_id(event)
     with pytest.raises(ValueError, match="composition"):
         parse_composition_event(event)

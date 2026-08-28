@@ -99,6 +99,29 @@ function compareAdapterVersions(left, right) {
   return 0;
 }
 
+function formatTrainingMetadata(training) {
+  if (!training || typeof training !== "object") return "";
+  const parts = [];
+  if (training.method) parts.push(escapeHtml(training.method));
+  if (training.rank) parts.push(`rank ${escapeHtml(String(training.rank))}`);
+  if (training.steps) parts.push(`${escapeHtml(String(training.steps))} steps`);
+  if (training.learning_rate) parts.push(`lr ${escapeHtml(String(training.learning_rate))}`);
+  if (training.seed !== undefined) parts.push(`seed ${escapeHtml(String(training.seed))}`);
+  if (training.dataset) parts.push(`dataset ${escapeHtml(training.dataset)}`);
+  if (training.dataset_sha256) parts.push(`dataset sha256 ${escapeHtml(training.dataset_sha256.slice(0, 16))}...`);
+  return parts.length ? `<div class="meta">Training: ${parts.join(" · ")}</div>` : "";
+}
+
+function formatCompositionComponents(components) {
+  if (!Array.isArray(components)) return "";
+  const entries = components.map((component) => {
+    const identity = `${component.name || "?"}@${component.version || "?"}`;
+    const digest = typeof component.manifest_sha256 === "string" ? ` · ${component.manifest_sha256.slice(0, 12)}...` : "";
+    return `${escapeHtml(identity)} × ${escapeHtml(String(component.weight))}${digest}`;
+  });
+  return entries.length ? `<div class="meta">Components: ${entries.join(" · ")}</div>` : "";
+}
+
 function base64Url(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   let binary = "";
@@ -266,8 +289,8 @@ function showAdapters() {
       <label>Components</label>
       <textarea id="composition-components" class="compact-textarea" placeholder="grounding@1.0.0=0.7&#10;style@1.0.0=1.0" required></textarea>
       <label>Evaluation records (optional JSON array)</label>
-      <textarea id="composition-evaluations" class="compact-textarea" placeholder='[{"name":"heldout-set","dataset":"corpus-v1","score":0.82}]'></textarea>
-      <label><input type="checkbox" id="composition-community-merge" /> Mark as community merge (requires evaluations)</label>
+      <textarea id="composition-evaluations" class="compact-textarea" placeholder='[{"name":"heldout-set","dataset":"corpus-v1","dataset_sha256":"...64 lowercase hex...","score":0.82}]'></textarea>
+      <label><input type="checkbox" id="composition-community-merge" /> Mark as community merge (requires evaluations with dataset_sha256)</label>
       <button class="btn secondary" type="submit">Create Composition</button>
       <div class="status-line" id="composition-status"></div>
     </form>
@@ -367,6 +390,14 @@ async function createComposition(event) {
     status.classList.add("error");
     return;
   }
+  if (form.querySelector("#composition-community-merge").checked &&
+      (!Array.isArray(evaluations) || !evaluations.length ||
+       evaluations.some((evaluation) => !evaluation || typeof evaluation !== "object" ||
+         typeof evaluation.dataset_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(evaluation.dataset_sha256)))) {
+    status.textContent = "Error: community merges require at least one evaluation with a lowercase dataset_sha256 digest.";
+    status.classList.add("error");
+    return;
+  }
   const components = form.querySelector("#composition-components").value.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
     const [adapter, rawWeight = "1"] = line.split("=");
     const at = adapter.lastIndexOf("@");
@@ -409,7 +440,7 @@ async function loadCompositions(holder) {
     }
     const grid = el(`<div class="grid"></div>`);
     for (const composition of compositions) {
-      const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.component_count} component(s)</div><div class="meta">${composition.community_merge ? "Community merge" : "Local composition"} · ${composition.evaluation_count ? `${composition.evaluation_count} evaluation record(s)` : "No evaluation records"}</div><div class="meta">${escapeHtml(composition.path)}</div><button class="btn secondary publish-composition" type="button">Publish to Nostr</button><button class="btn secondary remove-composition" type="button">Remove</button><div class="status-line composition-status"></div></div>`);
+      const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.component_count} component(s)</div>${formatCompositionComponents(composition.composition.components)}<div class="meta">${composition.community_merge ? "Community merge" : "Local composition"} · ${composition.evaluation_count ? `${composition.evaluation_count} evaluation record(s)` : "No evaluation records"}</div><div class="meta">${escapeHtml(composition.path)}</div><button class="btn secondary publish-composition" type="button">Publish to Nostr</button><button class="btn secondary remove-composition" type="button">Remove</button><div class="status-line composition-status"></div></div>`);
       card.querySelector(".publish-composition").addEventListener("click", () => publishComposition(composition, card));
       card.querySelector(".remove-composition").addEventListener("click", () => removeLocalComposition(composition, card));
       grid.appendChild(card);
@@ -455,10 +486,11 @@ async function publishComposition(entry, card) {
   status.textContent = "Signing composition...";
   try {
     const composition = entry.composition;
+    const componentTags = composition.components.map((component) => ["component", `${component.name}@${component.version}`, component.manifest_sha256, String(component.weight)]);
     const signed = await window.nostr.signEvent({
       kind: 30079,
       created_at: Math.floor(Date.now() / 1000),
-      tags: [["d", `composition:${composition.name}`], ["version", composition.version], ["base-model", composition.base_model], ["t", "hypotaxis-adapter-composition"]],
+      tags: [["d", `composition:${composition.name}`], ["version", composition.version], ["base-model", composition.base_model], ["t", "hypotaxis-adapter-composition"], ...componentTags],
       content: stableJson(composition),
     });
     if (!verifyEvent(signed)) throw new Error("signer returned an invalid event");
@@ -577,7 +609,8 @@ async function discoverAdapters(event) {
           <h3>${escapeHtml(manifest.name)} <span class="badge">${escapeHtml(manifest.version)}</span></h3>
           <div class="meta">${escapeHtml(manifest.base_model)} &middot; ${manifest.files.length} file(s)</div>
           <div class="meta">License: ${escapeHtml(manifest.license || "unspecified")}</div>
-          ${manifest.training ? `<div class="meta">Training: ${escapeHtml(manifest.training.method || "unspecified")}${manifest.training.rank ? ` · rank ${manifest.training.rank}` : ""}${manifest.training.examples !== undefined ? ` · ${manifest.training.examples} examples` : ""}</div>` : ""}
+          ${formatTrainingMetadata(manifest.training)}
+          ${manifest.training?.examples !== undefined ? `<div class="meta">Training examples: ${escapeHtml(String(manifest.training.examples))}</div>` : ""}
           ${Array.isArray(manifest.evaluations) && manifest.evaluations.length ? `<div class="meta">Evaluations: ${manifest.evaluations.map((evaluation) => `${escapeHtml(evaluation.name)} ${Number(evaluation.score).toFixed(2)}`).join(" · ")}</div>` : ""}
           <div class="meta">Creator: ${escapeHtml(release.creator_pubkey.slice(0, 16))}...</div>
           <div class="meta">Trust: Nostr signature verified</div>
@@ -665,7 +698,7 @@ async function discoverAdapters(event) {
         const ratingSummary = aggregate.count ? `${(aggregate.total / aggregate.count).toFixed(1)}/5 (${aggregate.count})` : "none yet";
         const reports = compositionReports.get(event.id);
         const reportSummary = reports ? `Community reports: ${reports.count} (${[...reports.reasons.entries()].map(([reason, count]) => `${escapeHtml(reason)} ${count}`).join(" · ")})` : "";
-        const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.components.length} component(s)</div><div class="meta">${composition.community_merge ? "Community merge" : "Composition"} · ${Array.isArray(composition.evaluations) ? composition.evaluations.length : 0} evaluation record(s)</div><div class="meta">Community rating: ${ratingSummary}</div>${reportSummary ? `<div class="meta">${reportSummary}</div>` : ""}<div class="meta">Creator: ${escapeHtml(event.pubkey.slice(0, 16))}... · Event: ${escapeHtml(event.id.slice(0, 16))}...</div>${installable ? `<button class="btn secondary install-composition" type="button">Install Components</button>` : ""}<button class="btn secondary report-composition" type="button">Report</button><button class="btn secondary rate-composition" type="button">Rate</button><div class="status-line composition-install-status"></div></div>`);
+        const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.components.length} component(s)</div>${formatCompositionComponents(composition.components)}<div class="meta">${composition.community_merge ? "Community merge" : "Composition"} · ${Array.isArray(composition.evaluations) ? composition.evaluations.length : 0} evaluation record(s)</div><div class="meta">Community rating: ${ratingSummary}</div>${reportSummary ? `<div class="meta">${reportSummary}</div>` : ""}<div class="meta">Creator: ${escapeHtml(event.pubkey.slice(0, 16))}... · Event: ${escapeHtml(event.id.slice(0, 16))}...</div>${installable ? `<button class="btn secondary install-composition" type="button">Install Components</button>` : ""}<button class="btn secondary report-composition" type="button">Report</button><button class="btn secondary rate-composition" type="button">Rate</button><div class="status-line composition-install-status"></div></div>`);
         if (installable) card.querySelector(".install-composition").addEventListener("click", () => installRemoteComposition(composition, event, componentReleases, card));
         card.querySelector(".report-composition").addEventListener("click", () => reportArtifact(event, 30079, card.querySelector(".report-composition")));
         card.querySelector(".rate-composition").addEventListener("click", () => rateArtifact(event, 30079, card.querySelector(".rate-composition")));
@@ -864,7 +897,7 @@ async function loadLocalAdapters(holder) {
         <div class="meta">${escapeHtml(adapter.base_model)} &middot; ${adapter.file_count} file(s)</div>
         <div class="meta">manifest ${escapeHtml(adapter.manifest_sha256.slice(0, 16))}...</div>
         <div class="meta">${escapeHtml(adapter.bundle_dir)}</div>
-        ${adapter.manifest.training ? `<div class="meta">Training: ${escapeHtml(adapter.manifest.training.method || "specified")}${adapter.manifest.training.rank ? ` · rank ${adapter.manifest.training.rank}` : ""}</div>` : ""}
+        ${formatTrainingMetadata(adapter.manifest.training)}
         ${Array.isArray(adapter.manifest.evaluations) && adapter.manifest.evaluations.length ? `<div class="meta">Evaluations: ${adapter.manifest.evaluations.length}</div>` : ""}
         <div class="meta torrent-state">BitTorrent: ${adapter.torrent_exists ? `ready (${escapeHtml(adapter.torrent_path)})` : adapter.torrent_available ? "not created" : "libtorrent unavailable"}</div>
         ${adapter.torrent_available && !adapter.torrent_exists ? `<button class="btn secondary create-torrent" type="button">Create Torrent</button>` : ""}

@@ -160,6 +160,9 @@ one validated evaluation record with a SHA-256 digest for the evaluated
 dataset. This prevents an evaluation-free or non-reproducible merge from
 being presented as a community release. Local compositions remain opt-in and
 may omit the flag and evaluations.
+Signed composition events also repeat each component as a `component` tag
+containing `name@version`, the manifest digest, and runtime weight, allowing
+clients to inspect lineage without decoding event content.
 Studio can publish a composition as a signed Nostr kind-30079 event. The event
 content contains the complete composition, including component manifest
 digests, weights, lineage, and evaluation evidence, so other clients can audit
