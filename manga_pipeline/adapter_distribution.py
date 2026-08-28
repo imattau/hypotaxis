@@ -605,6 +605,8 @@ def validate_composition(composition: dict[str, Any]) -> None:
                 raise ValueError(f"composition component missing {field}")
         if not isinstance(component["name"], str) or not component["name"].strip():
             raise ValueError("composition component name must be non-empty")
+        if not isinstance(component["version"], str) or not component["version"].strip():
+            raise ValueError("composition component version must be non-empty")
         if component["name"] in names:
             raise ValueError(f"duplicate composition component: {component['name']}")
         names.add(component["name"])

@@ -122,6 +122,20 @@ function formatCompositionComponents(components) {
   return entries.length ? `<div class="meta">Components: ${entries.join(" · ")}</div>` : "";
 }
 
+function formatEvaluations(evaluations) {
+  if (!Array.isArray(evaluations) || !evaluations.length) return "";
+  const entries = evaluations.map((evaluation) => {
+    const digest = typeof evaluation.dataset_sha256 === "string" ? ` · ${evaluation.dataset_sha256.slice(0, 12)}...` : " · unpinned dataset";
+    return `${escapeHtml(evaluation.name)} on ${escapeHtml(evaluation.dataset)}: ${escapeHtml(String(evaluation.score))}${digest}`;
+  });
+  return `<div class="meta">Evaluations: ${entries.join(" · ")}</div>`;
+}
+
+function compositionWeightTagValue(weight) {
+  const value = String(weight);
+  return value.includes(".") ? value : `${value}.0`;
+}
+
 function base64Url(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   let binary = "";
@@ -440,7 +454,7 @@ async function loadCompositions(holder) {
     }
     const grid = el(`<div class="grid"></div>`);
     for (const composition of compositions) {
-      const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.component_count} component(s)</div>${formatCompositionComponents(composition.composition.components)}<div class="meta">${composition.community_merge ? "Community merge" : "Local composition"} · ${composition.evaluation_count ? `${composition.evaluation_count} evaluation record(s)` : "No evaluation records"}</div><div class="meta">${escapeHtml(composition.path)}</div><button class="btn secondary publish-composition" type="button">Publish to Nostr</button><button class="btn secondary remove-composition" type="button">Remove</button><div class="status-line composition-status"></div></div>`);
+      const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.component_count} component(s)</div>${formatCompositionComponents(composition.composition.components)}<div class="meta">${composition.community_merge ? "Community merge" : "Local composition"} · ${composition.evaluation_count ? `${composition.evaluation_count} evaluation record(s)` : "No evaluation records"}</div>${formatEvaluations(composition.composition.evaluations)}<div class="meta">${escapeHtml(composition.path)}</div><button class="btn secondary publish-composition" type="button">Publish to Nostr</button><button class="btn secondary remove-composition" type="button">Remove</button><div class="status-line composition-status"></div></div>`);
       card.querySelector(".publish-composition").addEventListener("click", () => publishComposition(composition, card));
       card.querySelector(".remove-composition").addEventListener("click", () => removeLocalComposition(composition, card));
       grid.appendChild(card);
@@ -486,7 +500,7 @@ async function publishComposition(entry, card) {
   status.textContent = "Signing composition...";
   try {
     const composition = entry.composition;
-    const componentTags = composition.components.map((component) => ["component", `${component.name}@${component.version}`, component.manifest_sha256, String(component.weight)]);
+    const componentTags = composition.components.map((component) => ["component", `${component.name}@${component.version}`, component.manifest_sha256, compositionWeightTagValue(component.weight)]);
     const signed = await window.nostr.signEvent({
       kind: 30079,
       created_at: Math.floor(Date.now() / 1000),
@@ -611,7 +625,7 @@ async function discoverAdapters(event) {
           <div class="meta">License: ${escapeHtml(manifest.license || "unspecified")}</div>
           ${formatTrainingMetadata(manifest.training)}
           ${manifest.training?.examples !== undefined ? `<div class="meta">Training examples: ${escapeHtml(String(manifest.training.examples))}</div>` : ""}
-          ${Array.isArray(manifest.evaluations) && manifest.evaluations.length ? `<div class="meta">Evaluations: ${manifest.evaluations.map((evaluation) => `${escapeHtml(evaluation.name)} ${Number(evaluation.score).toFixed(2)}`).join(" · ")}</div>` : ""}
+          ${formatEvaluations(manifest.evaluations)}
           <div class="meta">Creator: ${escapeHtml(release.creator_pubkey.slice(0, 16))}...</div>
           <div class="meta">Trust: Nostr signature verified</div>
           <div class="meta">Community rating: ${release.rating_average === null ? "none yet" : `${release.rating_average.toFixed(1)}/5 (${release.rating_count})`}</div>
@@ -638,6 +652,11 @@ async function discoverAdapters(event) {
       try {
         const composition = JSON.parse(event.content);
         if (composition.schema !== "hypotaxis.adapter-composition.v1" || !Array.isArray(composition.components) || !composition.components.length) continue;
+        const taggedComponents = event.tags.filter((tag) => Array.isArray(tag) && tag[0] === "component");
+        if (taggedComponents.length) {
+          const expectedComponents = composition.components.map((component) => ["component", `${component.name}@${component.version}`, component.manifest_sha256, compositionWeightTagValue(component.weight)]);
+          if (JSON.stringify(taggedComponents) !== JSON.stringify(expectedComponents)) continue;
+        }
         const dTag = event.tags.find((tag) => tag[0] === "d")?.[1] || `composition:${composition.name}`;
         const key = `${event.pubkey}:${dTag}`;
         const previous = compositions.get(key);
@@ -698,7 +717,7 @@ async function discoverAdapters(event) {
         const ratingSummary = aggregate.count ? `${(aggregate.total / aggregate.count).toFixed(1)}/5 (${aggregate.count})` : "none yet";
         const reports = compositionReports.get(event.id);
         const reportSummary = reports ? `Community reports: ${reports.count} (${[...reports.reasons.entries()].map(([reason, count]) => `${escapeHtml(reason)} ${count}`).join(" · ")})` : "";
-        const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.components.length} component(s)</div>${formatCompositionComponents(composition.components)}<div class="meta">${composition.community_merge ? "Community merge" : "Composition"} · ${Array.isArray(composition.evaluations) ? composition.evaluations.length : 0} evaluation record(s)</div><div class="meta">Community rating: ${ratingSummary}</div>${reportSummary ? `<div class="meta">${reportSummary}</div>` : ""}<div class="meta">Creator: ${escapeHtml(event.pubkey.slice(0, 16))}... · Event: ${escapeHtml(event.id.slice(0, 16))}...</div>${installable ? `<button class="btn secondary install-composition" type="button">Install Components</button>` : ""}<button class="btn secondary report-composition" type="button">Report</button><button class="btn secondary rate-composition" type="button">Rate</button><div class="status-line composition-install-status"></div></div>`);
+        const card = el(`<div class="card"><h3>${escapeHtml(composition.name)} <span class="badge">${escapeHtml(composition.version)}</span></h3><div class="meta">${escapeHtml(composition.base_model)} · ${composition.components.length} component(s)</div>${formatCompositionComponents(composition.components)}<div class="meta">${composition.community_merge ? "Community merge" : "Composition"} · ${Array.isArray(composition.evaluations) ? composition.evaluations.length : 0} evaluation record(s)</div>${formatEvaluations(composition.evaluations)}<div class="meta">Community rating: ${ratingSummary}</div>${reportSummary ? `<div class="meta">${reportSummary}</div>` : ""}<div class="meta">Creator: ${escapeHtml(event.pubkey.slice(0, 16))}... · Event: ${escapeHtml(event.id.slice(0, 16))}...</div>${installable ? `<button class="btn secondary install-composition" type="button">Install Components</button>` : ""}<button class="btn secondary report-composition" type="button">Report</button><button class="btn secondary rate-composition" type="button">Rate</button><div class="status-line composition-install-status"></div></div>`);
         if (installable) card.querySelector(".install-composition").addEventListener("click", () => installRemoteComposition(composition, event, componentReleases, card));
         card.querySelector(".report-composition").addEventListener("click", () => reportArtifact(event, 30079, card.querySelector(".report-composition")));
         card.querySelector(".rate-composition").addEventListener("click", () => rateArtifact(event, 30079, card.querySelector(".rate-composition")));
@@ -898,7 +917,7 @@ async function loadLocalAdapters(holder) {
         <div class="meta">manifest ${escapeHtml(adapter.manifest_sha256.slice(0, 16))}...</div>
         <div class="meta">${escapeHtml(adapter.bundle_dir)}</div>
         ${formatTrainingMetadata(adapter.manifest.training)}
-        ${Array.isArray(adapter.manifest.evaluations) && adapter.manifest.evaluations.length ? `<div class="meta">Evaluations: ${adapter.manifest.evaluations.length}</div>` : ""}
+        ${formatEvaluations(adapter.manifest.evaluations)}
         <div class="meta torrent-state">BitTorrent: ${adapter.torrent_exists ? `ready (${escapeHtml(adapter.torrent_path)})` : adapter.torrent_available ? "not created" : "libtorrent unavailable"}</div>
         ${adapter.torrent_available && !adapter.torrent_exists ? `<button class="btn secondary create-torrent" type="button">Create Torrent</button>` : ""}
         ${adapter.torrent_exists ? `<button class="btn secondary seed-torrent" type="button">Start Seeding</button>` : ""}

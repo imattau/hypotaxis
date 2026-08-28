@@ -674,9 +674,11 @@ def test_parse_composition_event_rejects_mismatched_component_tags():
     event["id"] = nostr_event_id(event)
     with pytest.raises(ValueError, match="component tags"):
         parse_composition_event(event)
-    event["id"] = nostr_event_id(event)
-    with pytest.raises(ValueError, match="composition"):
-        parse_composition_event(event)
+
+
+def test_composition_rejects_missing_component_version():
+    with pytest.raises(ValueError, match="component version"):
+        build_composition("combined", "1.0.0", "base", [{"name": "style", "version": "", "manifest_sha256": "a" * 64, "weight": 1.0}])
 
 
 def test_composition_rejects_duplicate_components_and_bad_weights():
