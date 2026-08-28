@@ -19,6 +19,7 @@ from manga_pipeline.backends import (
     _dominant_location,
     _prop_notes,
     _round_to_8,
+    _seed_for,
 )
 from manga_pipeline.character_lora import (
     build_character_training_metadata,
@@ -180,15 +181,22 @@ def test_default_lora_output_dir_uses_sanitized_name(tmp_path):
 def test_build_character_training_metadata_is_reproducible():
     metadata = build_character_training_metadata(
         story_id="rain_letter", character="Jules", checkpoint="stabilityai/sdxl-turbo",
-        rank=8, steps=300, resolution=768, examples=7,
+        rank=8, steps=300, learning_rate=1e-4, resolution=768, examples=7, seed=23,
     )
     assert metadata["method"] == "character-lora"
     assert metadata["examples"] == 7
+    assert metadata["learning_rate"] == 1e-4
+    assert metadata["seed"] == 23
     with pytest.raises(ValueError, match="positive"):
         build_character_training_metadata(
             story_id="rain_letter", character="Jules", checkpoint="base",
-            rank=0, steps=300, resolution=768, examples=7,
+            rank=0, steps=300, learning_rate=1e-4, resolution=768, examples=7, seed=0,
         )
+
+
+def test_character_lora_seed_namespace_is_stable_and_distinct():
+    assert _seed_for("rain_letter:lora_training:Jules:23", 0) == _seed_for("rain_letter:lora_training:Jules:23", 0)
+    assert _seed_for("rain_letter:lora_training:Jules:23", 0) != _seed_for("rain_letter:lora_training:Jules:24", 0)
 
 
 # ---------- DiffusersBackend._activate_character_lora ----------

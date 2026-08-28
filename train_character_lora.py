@@ -36,6 +36,7 @@ def main() -> None:
     parser.add_argument("--rank", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--resolution", type=int, default=768)
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
     registry = CharacterRegistry(Path(args.registry_dir) / f"{args.story_id}.json")
@@ -51,7 +52,7 @@ def main() -> None:
 
     print(f"generating {args.bootstrap_count} bootstrap training images for '{args.character}'...")
     image_paths = backend.generate_character_lora_images(
-        args.story_id, args.character, args.style_prompt, registry, count=args.bootstrap_count
+        args.story_id, args.character, args.style_prompt, registry, count=args.bootstrap_count, seed=args.seed
     )
     captions = [
         build_training_caption(args.character, entry.description, args.style_prompt, view)
@@ -69,6 +70,7 @@ def main() -> None:
         learning_rate=args.lr,
         resolution=args.resolution,
         device=args.device,
+        seed=args.seed,
         on_progress=print,
     )
 
@@ -78,8 +80,10 @@ def main() -> None:
         checkpoint=args.checkpoint,
         rank=args.rank,
         steps=args.steps,
+        learning_rate=args.lr,
         resolution=args.resolution,
         examples=len(image_paths),
+        seed=args.seed,
     )
     (output_dir / "training-metadata.json").write_text(json.dumps(training_metadata, indent=2) + "\n", encoding="utf-8")
     metrics["training_metadata"] = training_metadata

@@ -186,7 +186,9 @@ not something to run casually per character. Also available from the studio: a "
 button on each character card (Stage B cast view), running as a background job the same way
 page generation does. The trained adapter is saved to
 `models/character_loras/<story_id>/<character>/` and recorded on the character's registry
-entry; `generate_panel()` picks it up automatically once `use_character_lora` is turned on
+entry. The trainer also writes a `training-metadata.json` sidecar containing the checkpoint,
+rank, steps, learning rate, seed, resolution, and bootstrap-example count. `generate_panel()`
+picks it up automatically once `use_character_lora` is turned on
 (a per-generation toggle, off by default - a story with nothing trained yet behaves exactly as
 before). Camera framing and character descriptions are unaffected either way - the LoRA only
 ever influences the panel's rendered likeness.
@@ -200,7 +202,8 @@ per-panel drift in those same features) - since the gap between 250 and 500 step
 small relative to the fixed per-run overhead, 300 was picked as a reasonable default rather
 than defaulting to the more expensive end. `--rank` (8) and `--bootstrap-count` (8) weren't
 separately tuned - 8 is a conventional default for a small character LoRA, not verified against
-alternatives here.
+alternatives here. Use `--seed` to make the bootstrap generation and training run reproducible
+where the backend supports deterministic generation.
 
 Implementation note: this is a deliberately minimal DreamBooth-style trainer (UNet LoRA only,
 no text-encoder LoRA, batch size 1, fixed per-image captions) rather than a full-featured one -

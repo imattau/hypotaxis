@@ -202,7 +202,7 @@ class ImageBackend(ABC):
         MockBackend has nothing to prepare."""
 
     def generate_character_lora_images(
-        self, story_id: str, name: str, style_prompt: str, registry: CharacterRegistry, count: int = 8
+        self, story_id: str, name: str, style_prompt: str, registry: CharacterRegistry, count: int = 8, seed: int = 0
     ) -> list:
         """Bootstrap a small set of varied training images for
         train_character_lora.py's per-character LoRA trainer - see
@@ -480,9 +480,7 @@ class DiffusersBackend(ImageBackend):
         paths: list[Path] = []
         for i, view in enumerate(views):
             prompt = f"{style_prompt}, character reference portrait of {name}, {description}, {view}"
-            generator = torch.Generator(device=self.device).manual_seed(
-                _seed_for(f"{story_id}:lora_training:{name}", i)
-            )
+            generator = torch.Generator(device=self.device).manual_seed(_seed_for(f"{story_id}:lora_training:{name}:{seed}", i))
             result = self._base_pipe(
                 prompt=prompt,
                 num_inference_steps=self.cfg.steps,

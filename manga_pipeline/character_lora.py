@@ -61,15 +61,17 @@ def build_character_training_metadata(
     checkpoint: str,
     rank: int,
     steps: int,
+    learning_rate: float,
     resolution: int,
     examples: int,
+    seed: int,
 ) -> dict[str, object]:
     """Return reproducible metadata for a character-LoRA training run."""
 
     if not story_id.strip() or not character.strip() or not checkpoint.strip():
         raise ValueError("story_id, character, and checkpoint must be non-empty")
-    if rank <= 0 or steps <= 0 or resolution <= 0 or examples <= 0:
-        raise ValueError("rank, steps, resolution, and examples must be positive")
+    if rank <= 0 or steps <= 0 or learning_rate <= 0 or resolution <= 0 or examples <= 0 or not isinstance(seed, int):
+        raise ValueError("rank, steps, learning_rate, resolution, and examples must be positive; seed must be an integer")
     return {
         "method": "character-lora",
         "story_id": story_id,
@@ -77,8 +79,10 @@ def build_character_training_metadata(
         "base_model": checkpoint,
         "rank": rank,
         "steps": steps,
+        "learning_rate": learning_rate,
         "resolution": resolution,
         "examples": examples,
+        "seed": seed,
     }
 
 

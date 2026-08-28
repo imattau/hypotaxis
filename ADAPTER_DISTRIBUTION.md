@@ -226,7 +226,7 @@ Pass `--include-camera` when rows also contain `reference_camera` and
 `prediction_camera` fields; the command then emits both caption exact-match
 and structured camera-accuracy records.
 
-Character-LoRA runs also write `training-metadata.json` beside the trained
+Character-LoRA runs, including Studio background jobs, also write `training-metadata.json` beside the trained
 weights. It records the story and character identity, base checkpoint, rank,
-steps, resolution, and number of generated training examples so the resulting
+steps, learning rate, seed, resolution, and number of generated training examples so the resulting
 adapter can be packaged with auditable training provenance.

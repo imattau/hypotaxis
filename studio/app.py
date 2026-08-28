@@ -48,6 +48,7 @@ from manga_pipeline.adapter_distribution import (  # noqa: E402
 from manga_pipeline.adapter_manifest import canonical_json, load_manifest  # noqa: E402
 from manga_pipeline.character_lora import (  # noqa: E402
     TRAINING_VIEW_PROMPTS,
+    build_character_training_metadata,
     build_training_caption,
     default_lora_output_dir,
     train_character_lora,
@@ -1113,6 +1114,7 @@ class TrainCharacterLoraRequest(BaseModel):
     rank: int = Field(8, ge=1, le=64)
     lr: float = Field(1e-4, gt=0, le=1e-2)
     resolution: int = Field(768, ge=256, le=1024)
+    seed: int = 0
 
 
 def _run_train_lora_job(
@@ -1137,7 +1139,7 @@ def _run_train_lora_job(
 
         on_progress(f"generating {req.bootstrap_count} bootstrap training images")
         image_paths = backend.generate_character_lora_images(
-            story_id, name, story.style_prompt, registry, count=req.bootstrap_count
+            story_id, name, story.style_prompt, registry, count=req.bootstrap_count, seed=req.seed
         )
         captions = [
             build_training_caption(name, entry.description, story.style_prompt, view)
@@ -1155,8 +1157,22 @@ def _run_train_lora_job(
             learning_rate=req.lr,
             resolution=req.resolution,
             device=req.device,
+            seed=req.seed,
             on_progress=on_progress,
         )
+        training_metadata = build_character_training_metadata(
+            story_id=story_id,
+            character=name,
+            checkpoint=req.checkpoint,
+            rank=req.rank,
+            steps=req.steps,
+            learning_rate=req.lr,
+            resolution=req.resolution,
+            examples=len(image_paths),
+            seed=req.seed,
+        )
+        (output_dir / "training-metadata.json").write_text(json.dumps(training_metadata, indent=2) + "\n", encoding="utf-8")
+        job["training_metadata"] = training_metadata
         registry.set_lora_path(name, str(output_dir))
         _finish_job(job, "done")
     except Exception as e:  # noqa: BLE001
