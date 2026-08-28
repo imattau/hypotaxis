@@ -25,6 +25,7 @@ from manga_pipeline.adapter_distribution import (  # noqa: E402
     build_manifest,
     build_release_event,
     create_torrent,
+    download_torrent,
     install_from_blossom,
     manifest_digest,
     mirror_blob,
@@ -224,6 +225,11 @@ class MirrorBlobRequest(BaseModel):
     authorization: str | None = Field(None, max_length=20000)
 
 
+class DownloadTorrentRequest(BaseModel):
+    magnet: str = Field(max_length=4000)
+    manifest: dict
+
+
 def _path_under(path_value: str, root: Path) -> Path:
     path = _project_path(path_value).resolve()
     root = root.resolve()
@@ -345,6 +351,41 @@ def mirror_adapter_blob(req: MirrorBlobRequest):
     return {"mirrored": True, "descriptor": descriptor}
 
 
+def _run_torrent_download_job(job_id: str, magnet: str, manifest: dict, destination: Path) -> None:
+    job = _jobs[job_id]
+    try:
+        job.update({"status": "running", "message": "waiting for torrent metadata", "progress": 0.0, "peers": 0, "download_rate": 0, "upload_rate": 0, "seeding": False})
+
+        def report(status: dict) -> None:
+            job.update(status)
+            job["message"] = "seeding" if status["seeding"] else "downloading"
+
+        bundle = download_torrent(magnet, destination, manifest, status_callback=report)
+        target = MODELS_DIR / "shared_adapters" / f"{manifest['name']}-{manifest['version']}"
+        if target.exists():
+            raise FileExistsError(target)
+        bundle.replace(target)
+        job.update({"status": "done", "message": "installed", "progress": 1.0, "bundle_dir": str(target.relative_to(ROOT)), "seeding": True, "finished_at": time.time()})
+    except FileExistsError:
+        _finish_job(job, "error", "adapter version is already installed")
+    except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+        _finish_job(job, "error", str(exc))
+    finally:
+        if destination.exists():
+            shutil.rmtree(destination, ignore_errors=True)
+
+
+@app.post("/api/adapters/torrent/download")
+def start_torrent_download(req: DownloadTorrentRequest):
+    """Start a verified magnet download and expose progress through /api/jobs."""
+
+    job_id = _create_job()
+    destination = MODELS_DIR / "shared_adapters" / f".torrent-download-{job_id}"
+    thread = threading.Thread(target=_run_torrent_download_job, args=(job_id, req.magnet, req.manifest, destination), daemon=True)
+    thread.start()
+    return {"job_id": job_id}
+
+
 @app.post("/api/adapters/discover")
 def discover_adapters(req: DiscoverAdaptersRequest):
     """Discover Hypotaxis release metadata from configured Nostr relays."""
@@ -416,6 +457,7 @@ def list_local_adapters():
                     "base_model": manifest["base_model"],
                     "file_count": len(manifest["files"]),
                     "manifest_sha256": manifest_digest(manifest),
+                    "manifest": manifest,
                     "bundle_dir": str(manifest_path.parent.relative_to(ROOT)),
                     "torrent_available": torrent_available(),
                     "torrent_exists": torrent_path.is_file(),

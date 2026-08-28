@@ -76,6 +76,14 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
 // ---------- Dataset Curation ----------
 
 async function showDatasetCuration() {
@@ -222,17 +230,58 @@ async function discoverAdapters(event) {
           <div class="meta">Trust: Nostr signature verified</div>
           <div class="meta">Event: ${escapeHtml(release.event_id.slice(0, 16))}...</div>
           ${Array.isArray(manifest.distribution?.blossom) && manifest.distribution.blossom.length ? `<button class="btn secondary install-adapter" type="button">Install from Blossom</button>` : ""}
+          ${manifest.distribution?.torrent?.magnet ? `<button class="btn secondary torrent-download" type="button">Download via BitTorrent</button>` : ""}
           <div class="status-line install-status"></div>
         </div>
       `);
       const installButton = card.querySelector(".install-adapter");
       if (installButton) installButton.addEventListener("click", () => installAdapter(release, installButton));
+      const torrentButton = card.querySelector(".torrent-download");
+      if (torrentButton) torrentButton.addEventListener("click", () => downloadAdapterTorrent(release, torrentButton));
       results.appendChild(card);
     }
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
   } finally {
+    button.disabled = false;
+  }
+}
+
+async function downloadAdapterTorrent(release, button) {
+  const card = button.closest(".card");
+  const status = card.querySelector(".install-status");
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Starting torrent...";
+  try {
+    const { job_id } = await api("/api/adapters/torrent/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ magnet: release.manifest.distribution.torrent.magnet, manifest: release.manifest }),
+    });
+    const poll = async () => {
+      const job = await api(`/api/jobs/${job_id}`);
+      const progress = Math.round((job.progress || 0) * 100);
+      const rate = job.download_rate ? ` · ${Math.round(job.download_rate / 1024)} KiB/s` : "";
+      status.textContent = `${job.message || "downloading"} ${progress}% · ${job.peers || 0} peer(s)${rate}`;
+      if (job.status === "done") {
+        status.textContent = `Installed at ${job.bundle_dir}`;
+        button.remove();
+      } else if (job.status === "error") {
+        throw new Error(job.message);
+      } else {
+        setTimeout(() => poll().catch((error) => {
+          status.textContent = "Error: " + error.message;
+          status.classList.add("error");
+          button.disabled = false;
+        }), 1000);
+      }
+    };
+    await poll();
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
     button.disabled = false;
   }
 }
@@ -276,17 +325,61 @@ async function loadLocalAdapters(holder) {
         <div class="meta">${escapeHtml(adapter.bundle_dir)}</div>
         <div class="meta torrent-state">BitTorrent: ${adapter.torrent_exists ? `ready (${escapeHtml(adapter.torrent_path)})` : adapter.torrent_available ? "not created" : "libtorrent unavailable"}</div>
         ${adapter.torrent_available && !adapter.torrent_exists ? `<button class="btn secondary create-torrent" type="button">Create Torrent</button>` : ""}
+        <button class="btn secondary publish-adapter" type="button">Publish to Nostr</button>
         <div class="status-line torrent-status"></div>
+        <div class="status-line publish-status"></div>
       </div>
       `));
       const torrentButton = grid.lastElementChild.querySelector(".create-torrent");
       if (torrentButton) {
         torrentButton.addEventListener("click", () => createTorrent(adapter, torrentButton));
       }
+      const publishButton = grid.lastElementChild.querySelector(".publish-adapter");
+      publishButton.addEventListener("click", () => publishAdapter(adapter, publishButton));
     }
     holder.appendChild(grid);
   } catch (e) {
     holder.innerHTML = `<div class="section-title">Local Adapter Registry</div><p class="status-line error">Could not load local bundles: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+async function publishAdapter(adapter, button) {
+  const card = button.closest(".card");
+  const status = card.querySelector(".publish-status");
+  const relayText = prompt("Nostr relay URLs (comma-separated)", "wss://relay.damus.io,wss://nos.lol");
+  if (!relayText) return;
+  const relays = relayText.split(",").map((value) => value.trim()).filter(Boolean);
+  if (!window.nostr || typeof window.nostr.signEvent !== "function") {
+    status.textContent = "Error: a NIP-07 browser signer is required.";
+    status.classList.add("error");
+    return;
+  }
+  button.disabled = true;
+  status.classList.remove("error");
+  status.textContent = "Requesting signature...";
+  try {
+    const manifest = adapter.manifest;
+    const unsigned = {
+      kind: 30078,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [
+        ["d", `adapter:${manifest.name}`],
+        ["version", manifest.version],
+        ["base-model", manifest.base_model],
+        ["t", "hypotaxis-adapter"],
+      ],
+      content: stableJson(manifest) + "\n",
+    };
+    const signed = await window.nostr.signEvent(unsigned);
+    if (!verifyEvent(signed)) throw new Error("signer returned an invalid event");
+    status.textContent = "Publishing to relays...";
+    await Promise.any(nostrPool.publish(relays, signed));
+    status.textContent = `Published event ${signed.id.slice(0, 16)}...`;
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
+  } finally {
+    button.disabled = false;
   }
 }
 

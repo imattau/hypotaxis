@@ -35,6 +35,7 @@ from manga_pipeline.adapter_distribution import (
     validate_signed_event,
     verify_bundle,
     write_bundle,
+    _torrent_status,
 )
 
 
@@ -507,3 +508,21 @@ def test_build_manifest_rejects_path_escape(tmp_path):
             license="MIT",
             files=["../adapter_model.safetensors"],
         )
+
+
+def test_torrent_status_normalizes_transfer_metrics():
+    class Status:
+        progress = 1.4
+        num_peers = 3
+        download_rate = 1200
+        upload_rate = 80
+        state = "seeding"
+
+    assert _torrent_status(Status(), seeding=True) == {
+        "progress": 1.0,
+        "peers": 3,
+        "download_rate": 1200,
+        "upload_rate": 80,
+        "state": "seeding",
+        "seeding": True,
+    }

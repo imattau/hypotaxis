@@ -758,6 +758,7 @@ def download_torrent(
     manifest: dict[str, Any],
     *,
     progress=None,
+    status_callback=None,
     timeout: int = 3600,
 ) -> Path:
     """Download a magnet and verify its resulting adapter bundle.
@@ -779,6 +780,8 @@ def download_torrent(
     while not handle.has_metadata():
         if time.monotonic() >= deadline:
             raise TimeoutError("timed out waiting for torrent metadata")
+        if status_callback is not None:
+            status_callback(_torrent_status(handle.status(), seeding=False))
         time.sleep(0.25)
     while not handle.is_seed():
         if time.monotonic() >= deadline:
@@ -786,12 +789,30 @@ def download_torrent(
         status = handle.status()
         if progress is not None:
             progress(max(0.0, min(1.0, float(status.progress))))
+        if status_callback is not None:
+            status_callback(_torrent_status(status, seeding=False))
         time.sleep(0.25)
     if progress is not None:
         progress(1.0)
+    if status_callback is not None:
+        status_callback(_torrent_status(handle.status(), seeding=True))
     bundle_roots = [destination_dir] if (destination_dir / "manifest.json").is_file() else list(destination_dir.glob("*/manifest.json"))
     if len(bundle_roots) != 1:
         raise ValueError("torrent download did not produce exactly one adapter bundle")
     bundle_root = bundle_roots[0].parent
     verify_bundle(manifest, bundle_root)
     return bundle_root
+
+
+def _torrent_status(status: Any, *, seeding: bool) -> dict[str, Any]:
+    """Normalize a libtorrent status object for UI/API consumers."""
+
+    progress = max(0.0, min(1.0, float(getattr(status, "progress", 0.0))))
+    return {
+        "progress": progress,
+        "peers": int(getattr(status, "num_peers", 0)),
+        "download_rate": int(getattr(status, "download_rate", 0)),
+        "upload_rate": int(getattr(status, "upload_rate", 0)),
+        "state": str(getattr(status, "state", "downloading")),
+        "seeding": bool(seeding),
+    }

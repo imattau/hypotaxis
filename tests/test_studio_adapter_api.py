@@ -164,3 +164,26 @@ def test_mirror_adapter_blob_endpoint_returns_descriptor(monkeypatch):
     )
     assert result["mirrored"] is True
     assert result["descriptor"]["sha256"] == "a" * 64
+
+
+def test_start_torrent_download_returns_job_id(monkeypatch, tmp_path):
+    monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    started = []
+
+    class FakeThread:
+        def __init__(self, *, target, args, daemon):
+            started.append((target, args, daemon))
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(studio_app.threading, "Thread", FakeThread)
+    result = studio_app.start_torrent_download(
+        studio_app.DownloadTorrentRequest(
+            magnet="magnet:?xt=urn:btih:abc",
+            manifest={"name": "grounding", "version": "1.0.0"},
+        )
+    )
+    assert result["job_id"]
+    assert len(started) == 1
+    assert started[0][1][0] == result["job_id"]
