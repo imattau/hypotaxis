@@ -155,6 +155,8 @@ merges across different base models before a composition is published.
 Studio exposes `POST /api/adapters/composition` to create these manifests from
 local bundles. It refuses mismatched base models and retains each source
 manifest digest so a composition can be audited or reversed later.
+The Diffusers runtime also rejects a composition whose declared base model does
+not match the active pipeline checkpoint before loading component weights.
 Compositions can be marked as `community_merge`; that flag requires at least
 one validated evaluation record with a SHA-256 digest for the evaluated
 dataset. This prevents an evaluation-free or non-reproducible merge from

@@ -302,12 +302,60 @@ def test_activate_composition_loads_verified_components_and_weights(tmp_path):
     composition_path = root / "compositions" / "bank-1.0.0.json"
     composition_path.parent.mkdir()
     composition_path.write_text(json.dumps(composition), encoding="utf-8")
-    backend = DiffusersBackend(PipelineConfig(adapter_composition_path=str(composition_path)))
+    backend = DiffusersBackend(PipelineConfig(checkpoint="base", adapter_composition_path=str(composition_path)))
     backend._base_pipe = _FakePipe()
 
     assert backend._activate_composition() is True
     assert [call[1] for call in backend._base_pipe.load_calls] == ["bank_one_1.0.0", "bank_two_1.0.0"]
     assert backend._base_pipe.set_adapters_calls == [(["bank_one_1.0.0", "bank_two_1.0.0"], [0.5, 1.25])]
+
+    composition["components"][0]["weight"] = 1.0
+    composition_path.write_text(json.dumps(composition), encoding="utf-8")
+    assert backend._activate_composition() is True
+    assert len(backend._base_pipe.load_calls) == 4
+    assert backend._base_pipe.set_adapters_calls[-1] == (["bank_one_1.0.0", "bank_two_1.0.0"], [1.0, 1.25])
+
+
+def test_activate_composition_revalidates_cached_component_files(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "adapter_model.safetensors").write_bytes(b"original")
+    root = tmp_path / "shared_adapters"
+    manifest = build_manifest(source, name="one", version="1.0.0", base_model="base", license="MIT")
+    write_bundle(source, root / "one-1.0.0", manifest)
+    composition = build_composition(
+        "bank", "1.0.0", "base",
+        [{"name": "one", "version": "1.0.0", "manifest_sha256": manifest_digest(manifest), "weight": 1.0}],
+    )
+    composition_path = root / "compositions" / "bank-1.0.0.json"
+    composition_path.parent.mkdir()
+    composition_path.write_text(json.dumps(composition), encoding="utf-8")
+    backend = DiffusersBackend(PipelineConfig(checkpoint="base", adapter_composition_path=str(composition_path)))
+    backend._base_pipe = _FakePipe()
+    backend._activate_composition()
+    (root / "one-1.0.0" / "adapter_model.safetensors").write_bytes(b"tampered")
+    with pytest.raises(ValueError, match="sha256 mismatch"):
+        backend._activate_composition()
+
+
+def test_activate_composition_rejects_pipeline_base_model_mismatch(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "adapter_model.safetensors").write_bytes(b"weights")
+    root = tmp_path / "shared_adapters"
+    manifest = build_manifest(source, name="one", version="1.0.0", base_model="trained-base", license="MIT")
+    write_bundle(source, root / "one-1.0.0", manifest)
+    composition = build_composition(
+        "bank", "1.0.0", "trained-base",
+        [{"name": "one", "version": "1.0.0", "manifest_sha256": manifest_digest(manifest), "weight": 1.0}],
+    )
+    composition_path = root / "compositions" / "bank-1.0.0.json"
+    composition_path.parent.mkdir()
+    composition_path.write_text(json.dumps(composition), encoding="utf-8")
+    backend = DiffusersBackend(PipelineConfig(checkpoint="different-base", adapter_composition_path=str(composition_path)))
+    backend._base_pipe = _FakePipe()
+    with pytest.raises(ValueError, match="pipeline checkpoint"):
+        backend._activate_composition()
 
 
 # ---------- DiffusersBackend._generate_with_pose_controlnet ----------

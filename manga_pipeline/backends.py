@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .character_lora import TRAINING_VIEW_PROMPTS, sanitize_adapter_name
 from .adapter_distribution import resolve_composition_paths
+from .adapter_manifest import canonical_json
 from .config import PipelineConfig, resolve_device
 from .fonts import load_font, wrap_to_width
 from .pose_skeleton import multi_person_skeleton
@@ -334,6 +335,7 @@ class DiffusersBackend(ImageBackend):
         self._loaded_lora_adapters: set[str] = set()
         self._active_lora_adapter: str | None = None
         self._active_composition_path: str | None = None
+        self._active_composition_digest: str | None = None
         # separate pose-ControlNet pipe (see _load_pose_pipe) - only loaded
         # lazily, the first time a panel actually needs it
         self._pose_pipe = None
@@ -524,23 +526,31 @@ class DiffusersBackend(ImageBackend):
             if self._active_composition_path is not None:
                 self._base_pipe.disable_lora()
                 self._active_composition_path = None
+                self._active_composition_digest = None
             return False
         path = Path(composition_path).resolve()
-        if self._active_composition_path == str(path):
-            return True
-        composition = json.loads(path.read_text(encoding="utf-8"))
+        composition_bytes = path.read_bytes()
+        composition = json.loads(composition_bytes)
+        if composition.get("base_model") != self.cfg.checkpoint:
+            raise ValueError("composition base model does not match pipeline checkpoint")
         components = resolve_composition_paths(composition, path.parent.parent)
+        composition_digest = hashlib.sha256(canonical_json(composition)).hexdigest()
+        unchanged = (
+            self._active_composition_path == str(path)
+            and self._active_composition_digest == composition_digest
+        )
         names = []
         weights = []
         for component in components:
             adapter_name = sanitize_adapter_name(f"{composition['name']}_{component['name']}_{component['version']}")
-            if adapter_name not in self._loaded_lora_adapters:
+            if not unchanged or adapter_name not in self._loaded_lora_adapters:
                 self._base_pipe.load_lora_weights(component["path"], adapter_name=adapter_name)
                 self._loaded_lora_adapters.add(adapter_name)
             names.append(adapter_name)
             weights.append(component["weight"])
         self._base_pipe.set_adapters(names, adapter_weights=weights)
         self._active_composition_path = str(path)
+        self._active_composition_digest = composition_digest
         self._active_lora_adapter = None
         return True
 
