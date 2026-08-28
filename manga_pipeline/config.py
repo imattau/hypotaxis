@@ -37,10 +37,22 @@ def atomic_write_text(path: str | Path, content: str) -> None:
 @dataclass
 class PipelineConfig:
     backend: str = "mock"  # mock | diffusers
-    checkpoint: str = "stabilityai/sdxl-turbo"
+    # base SDXL (not the turbo distillation) with real classifier-free
+    # guidance: A/B tested against sdxl-turbo (checkpoint=stabilityai/sdxl-turbo,
+    # steps=4, guidance_scale=1.0) on the same page of a real manuscript -
+    # turbo's near-zero guidance_scale is what makes it fast, but it also
+    # means the text prompt barely competes with the base model's own prior,
+    # and tight framings (close-up/extreme close-up) kept drifting to a
+    # photorealistic look regardless of an explicit manga style_prompt (see
+    # story_adapt.py/bubbles.py history). 30 steps at guidance_scale=7.0
+    # produced consistently on-style output across every panel in that same
+    # test page, at roughly 2x the per-panel generation time - a page took
+    # ~9-10s/panel instead of ~4-5s/panel, not the naive 7-8x steps ratio
+    # would suggest, since fixed per-call overhead dominates less at scale.
+    checkpoint: str = "stabilityai/stable-diffusion-xl-base-1.0"
     device: str = "auto"
-    steps: int = 4
-    guidance_scale: float = 1.0
+    steps: int = 30
+    guidance_scale: float = 7.0
     page_width: int = 1024
     page_height: int = 1536
     output_dir: str = "output"
