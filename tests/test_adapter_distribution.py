@@ -681,6 +681,12 @@ def test_composition_rejects_missing_component_version():
         build_composition("combined", "1.0.0", "base", [{"name": "style", "version": "", "manifest_sha256": "a" * 64, "weight": 1.0}])
 
 
+def test_composition_rejects_unsafe_component_identifiers():
+    component = {"name": "../style", "version": "1.0.0", "manifest_sha256": "a" * 64, "weight": 1.0}
+    with pytest.raises(ValueError, match="unsupported characters"):
+        build_composition("combined", "1.0.0", "base", [component])
+
+
 def test_composition_rejects_duplicate_components_and_bad_weights():
     component = {"name": "grounding", "version": "1", "manifest_sha256": "a" * 64, "weight": 0.8}
     with pytest.raises(ValueError, match="duplicate"):

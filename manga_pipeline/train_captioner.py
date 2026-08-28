@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 
+from .adapter_manifest import sha256_file, validate_training_metadata
 from .llm import get_embedder
 
 _TASK_PREFIX = "caption: "
@@ -17,6 +18,33 @@ CAMERA_HINTS = [
     "over-the-shoulder",
     "bird's-eye view",
 ]
+
+
+def build_captioner_training_metadata(
+    *, dataset_path: str | Path, base_model: str, epochs: int,
+    total_examples: int, grounded_examples: int, train_examples: int,
+    eval_examples: int,
+) -> dict[str, object]:
+    """Return reproducible metadata for a captioner LoRA training run."""
+
+    if epochs <= 0 or total_examples <= 0 or grounded_examples <= 0 or train_examples <= 0 or eval_examples <= 0:
+        raise ValueError("epochs and training example counts must be positive")
+    metadata: dict[str, object] = {
+        "method": "captioner-lora",
+        "base_model": base_model,
+        "rank": 8,
+        "learning_rate": 1e-3,
+        "seed": 0,
+        "dataset": Path(dataset_path).name,
+        "dataset_sha256": sha256_file(dataset_path),
+        "examples": total_examples,
+        "epochs": epochs,
+        "grounded_examples": grounded_examples,
+        "train_examples": train_examples,
+        "eval_examples": eval_examples,
+    }
+    validate_training_metadata(metadata)
+    return metadata
 
 
 def guess_camera_hint(chunk: str, character_count: int) -> str:
@@ -238,6 +266,16 @@ def train(
     adapter_dir = Path(output_dir) / "adapter"
     model.save_pretrained(adapter_dir)
     tokenizer.save_pretrained(adapter_dir)
+    training_metadata = build_captioner_training_metadata(
+        dataset_path=dataset_path,
+        base_model=base_model,
+        epochs=epochs,
+        total_examples=len(records),
+        grounded_examples=len(kept),
+        train_examples=len(tokenized["train"]),
+        eval_examples=len(tokenized["test"]),
+    )
+    (adapter_dir / "training-metadata.json").write_text(json.dumps(training_metadata, indent=2) + "\n", encoding="utf-8")
 
     return {
         "total_pairs": len(records),
@@ -247,4 +285,5 @@ def train(
         "eval_loss": metrics.get("eval_loss"),
         "adapter_dir": str(adapter_dir),
         "base_model": base_model,
+        "training_metadata": training_metadata,
     }

@@ -441,7 +441,9 @@ honestly rather than papered over:
 
   To use it: `python train_captioner.py --dataset data/caption_pairs_curated.jsonl` (writes
   to `models/captioner/adapter` by default), then check "Use trained captioner" on the studio's
-  New Story form, or pass a `Captioner` instance to `adapt_story()` directly. Character
+  New Story form, or pass a `Captioner` instance to `adapt_story()` directly. The trainer also
+  writes `adapter/training-metadata.json` with the dataset SHA-256 and reproducibility fields,
+  so the adapter can be packaged and audited like a character LoRA. Character
   descriptions still go through the bridge LLM either way - the captioner was never trained for
   that task. `data/caption_pairs.jsonl`, the older auto-harvested dataset that still grows from
   normal Stage A use, remains unreviewed and untrusted for training (its targets are the bridge

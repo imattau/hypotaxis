@@ -603,10 +603,10 @@ def validate_composition(composition: dict[str, Any]) -> None:
         for field in ("name", "version", "manifest_sha256", "weight"):
             if field not in component:
                 raise ValueError(f"composition component missing {field}")
-        if not isinstance(component["name"], str) or not component["name"].strip():
-            raise ValueError("composition component name must be non-empty")
-        if not isinstance(component["version"], str) or not component["version"].strip():
-            raise ValueError("composition component version must be non-empty")
+        if not isinstance(component["name"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", component["name"]):
+            raise ValueError("composition component name contains unsupported characters")
+        if not isinstance(component["version"], str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", component["version"]):
+            raise ValueError("composition component version contains unsupported characters")
         if component["name"] in names:
             raise ValueError(f"duplicate composition component: {component['name']}")
         names.add(component["name"])
