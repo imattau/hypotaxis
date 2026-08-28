@@ -68,6 +68,70 @@ def _prop_notes(panel: Panel, prop_registry: CharacterRegistry | None) -> str:
     return ", ".join(notes)
 
 
+# Expands a handful of CAMERA_HINTS (train_captioner.py) into longer,
+# more explicit compositional phrasing for the SDXL prompt only - found via
+# real generation comparisons (not just eyeballing the two-to-three-word
+# hint) that sdxl-turbo at its production steps/guidance settings mostly
+# ignores the terse form of these four: "wide two-shot" and "wide
+# establishing shot" both rendered as an ordinary close/medium two-shot,
+# and "bird's-eye view" produced no overhead angle at all. Spelling out
+# what the shot actually contains (full room vs. close crop, camera
+# position, what's blurred vs. sharp) fixed three of the four outright on
+# the same cheap checkpoint - no checkpoint switch, no LoRA training
+# needed. "over-the-shoulder" only partially improved (both faces turned
+# to profile, but no real foreground shoulder/head occlusion) and pushing
+# the phrasing further overcorrected into a single-subject blurred
+# close-up that lost the second character and drifted off the manga
+# line-art style entirely - so it's left at the milder, partial-improvement
+# phrasing rather than chasing a further fix here.
+#
+# The short form is deliberately kept as panel.camera_hint's actual value
+# (unaffected by this table) - it's what parse_caption_and_camera parses
+# and what the captioner is trained to predict; this expansion only
+# happens at prompt-build time, for the categories known to need it.
+# extreme close-up/close-up/medium shot aren't here since they already
+# render correctly from the terse hint alone.
+_CAMERA_HINT_PROMPT_EXPANSIONS = {
+    "wide two-shot": (
+        "wide shot, both characters visible full-body, standing apart, "
+        "wide angle lens, lots of empty space around them"
+    ),
+    "wide establishing shot": (
+        "wide establishing shot, entire room visible, small distant figures, "
+        "long shot, environment fills the frame"
+    ),
+    "over-the-shoulder": (
+        "over-the-shoulder shot, blurred silhouette of shoulder and back of "
+        "head filling the foreground, other character facing camera in sharp focus"
+    ),
+    "bird's-eye view": (
+        "bird's-eye view, directly overhead camera angle, top-down aerial "
+        "perspective looking straight down at the scene"
+    ),
+}
+
+
+def _build_prompt(style_prompt: str, panel: Panel, prop_registry: CharacterRegistry | None) -> str:
+    """The real SDXL generation prompt for one panel.
+
+    camera_hint (Stage A's content-aware shot framing, e.g. "close-up",
+    "wide establishing shot", "bird's-eye view" - see CAMERA_HINTS in
+    train_captioner.py) is expanded via _CAMERA_HINT_PROMPT_EXPANSIONS (for
+    the handful of hints known to need it) and placed right after
+    style_prompt and before the scene description: MockBackend already
+    showed the raw hint as a cosmetic text label, but DiffusersBackend was
+    silently dropping it entirely, and shot-type phrasing early in an SDXL
+    prompt tends to influence composition more reliably than the same words
+    buried after a long scene description.
+    """
+    camera_phrase = _CAMERA_HINT_PROMPT_EXPANSIONS.get(panel.camera_hint, panel.camera_hint)
+    prompt = ", ".join(part for part in (style_prompt, camera_phrase, panel.scene_description) if part)
+    prop_notes = _prop_notes(panel, prop_registry)
+    if prop_notes:
+        prompt = f"{prompt}, featuring {prop_notes}"
+    return prompt
+
+
 def _abstract_character_note(name: str | None, registry: CharacterRegistry | None) -> str:
     """Text-anchoring for a character marked abstract/no-form (see
     parse_character_profiles) - same trick as _prop_notes, for the same
@@ -531,10 +595,7 @@ class DiffusersBackend(ImageBackend):
 
         seed = _seed_for(story_id, page_index, panel_index)
         generator = torch.Generator(device=self.device).manual_seed(seed)
-        prompt = f"{style_prompt}, {panel.scene_description}" if style_prompt else panel.scene_description
-        prop_notes = _prop_notes(panel, prop_registry)
-        if prop_notes:
-            prompt = f"{prompt}, featuring {prop_notes}"
+        prompt = _build_prompt(style_prompt, panel, prop_registry)
 
         char_name = self._resolve_target(panel.characters, _dominant_character(page))
         char_entry = registry.get(char_name) if (registry and char_name) else None

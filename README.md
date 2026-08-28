@@ -185,6 +185,25 @@ This is an active prototype, not a finished product. Known limitations are track
 honestly rather than papered over:
 
 - The Stage A caption LLM (3B by default) still sometimes hallucinates content not in the source text on passages with little concrete visual detail, though noticeably less than the 0.5B model it replaced. It also occasionally echoes its own prompt instructions back as if they were caption text (a known small-model failure mode) - a sanitization pass catches and strips the clearest cases (leaked instruction phrases, invented screenplay-style scene slugs) before the caption ever reaches image generation, but this is a guard against the worst outcomes, not a guarantee the model never misbehaves.
+- `panel.camera_hint` reaches the real SDXL generation prompt (`_build_prompt` in
+  `manga_pipeline/backends.py`), but the production checkpoint (`sdxl-turbo` at its low
+  steps/guidance settings) mostly ignored the terse 2-3 word form of four of the seven hints
+  in real generation comparisons: "wide two-shot" and "wide establishing shot" both rendered
+  as an ordinary close/medium two-shot, "bird's-eye view" produced no overhead angle at all,
+  and "over-the-shoulder" rendered as a flat frontal two-shot. Neither more inference steps
+  nor switching to full `stable-diffusion-xl-base-1.0` at standard settings reliably fixed
+  this on their own (the checkpoint swap helped over-the-shoulder somewhat, at ~7-8x the
+  per-panel cost, but left the other three largely unchanged). What did work: spelling out
+  what the shot actually contains - room extent, camera position, what's blurred vs. sharp -
+  rather than the short label alone. `_CAMERA_HINT_PROMPT_EXPANSIONS` in `backends.py`
+  expands three of the four hints into this longer phrasing at prompt-build time only (the
+  short form stays what `panel.camera_hint` actually holds, and what the captioner is trained
+  to predict); this fixed wide-two-shot, wide-establishing-shot, and bird's-eye-view outright
+  on the unmodified production checkpoint. Over-the-shoulder only partially improved (both
+  faces turn to profile, but no real foreground shoulder/head occlusion), and pushing the
+  phrasing further overcorrected into a single-subject blurred close-up that lost the second
+  character and drifted off the manga line-art style - so it's left at the milder, imperfect
+  phrasing rather than chasing a further fix.
 - Dialogue speaker attribution can't resolve pure-pronoun cases ("he called out") without
   coreference resolution, which isn't wired in (the well-known libraries for this —
   `coreferee`, `spacy-experimental`, `BookNLP` — are all currently incompatible with a
@@ -205,19 +224,30 @@ honestly rather than papered over:
   at-a-time, and real GPU time per character - not a default anyone gets for free.
 - A LoRA-fine-tuned captioner (`train_captioner.py`, `manga_pipeline/captioner.py`) is
   implemented, trained, and wired into Stage A as an opt-in alternative to the bridge LLM for
-  panel captions. It trains on `data/caption_pairs_curated.jsonl`, a 2,000-example
-  human-reviewed dataset built via `curate_dataset.py` (see "Curating a clean caption dataset"
-  below). Default base model is `google-t5/t5-base`, chosen over `t5-small` after a direct
-  comparison at the same dataset size showed a clear quality gap (eval loss 1.72 vs. 2.17,
-  and t5-small visibly confusing subjects in multi-character sentences that t5-base got right).
+  panel captions. It trains on `data/caption_pairs_curated.jsonl` (see "Curating a clean caption
+  dataset" below) on a joint `"CAPTION: ...\nCAMERA: ..."` target (`to_examples()` in
+  `train_captioner.py`), so `Captioner.generate()` returns real, content-aware camera framing
+  parsed straight out of the model's own output (`parse_caption_and_camera`) - not just the flat
+  `guess_camera_hint()` keyword heuristic, though that's still the fallback when the model's
+  output doesn't include a recognizable camera value (or for an older adapter trained on
+  caption-only targets, whose output never will). Default base model is `google-t5/t5-base`,
+  chosen over `t5-small` after a direct comparison at the same dataset size showed a clear
+  quality gap (eval loss 1.72 vs. 2.17, and t5-small visibly confusing subjects in
+  multi-character sentences that t5-base got right).
+
+  Found via real generation output, not just eval loss: a fine-tuned T5-base captioner reliably
+  learns the field order but not the literal newline between `CAPTION:` and `CAMERA:` - it
+  collapses both onto one line. `parse_caption_and_camera` matches `camera:` anywhere in the
+  response rather than only at the start of its own line, so this doesn't silently discard a
+  correct camera prediction in favor of the heuristic.
+
   To use it: `python train_captioner.py --dataset data/caption_pairs_curated.jsonl` (writes
   to `models/captioner/adapter` by default), then check "Use trained captioner" on the studio's
-  New Story form, or pass a `Captioner` instance to `adapt_story()` directly. The captioner only
-  replaces caption text - camera framing still uses the `guess_camera_hint()` keyword heuristic
-  in this path (the captioner was never trained to output it), and character descriptions still
-  go through the bridge LLM either way. `data/caption_pairs.jsonl`, the older auto-harvested
-  dataset that still grows from normal Stage A use, remains unreviewed and untrusted for
-  training (its targets are the bridge LLM's own, sometimes-hallucinated output).
+  New Story form, or pass a `Captioner` instance to `adapt_story()` directly. Character
+  descriptions still go through the bridge LLM either way - the captioner was never trained for
+  that task. `data/caption_pairs.jsonl`, the older auto-harvested dataset that still grows from
+  normal Stage A use, remains unreviewed and untrusted for training (its targets are the bridge
+  LLM's own, sometimes-hallucinated output).
 
 ## Curating a clean caption dataset
 
@@ -225,7 +255,7 @@ The auto-harvested dataset above trains a LoRA to imitate the bridge LLM's mista
 everything else, since its targets were never reviewed. `curate_dataset.py` generates review
 candidates instead: it runs a deliberately *stronger* teacher model (`Qwen/Qwen2.5-7B-Instruct`
 by default, loaded in 4-bit so it fits alongside everything else on a modest card) over one or
-more story text files and writes `{input, characters, target}` candidates to
+more story text files and writes `{input, characters, target, camera}` candidates to
 `data/caption_candidates.jsonl` - the same shape `train_captioner.py` expects, but not yet
 trusted.
 
@@ -234,11 +264,24 @@ pip install -r requirements-story-adapt.txt -r requirements-training.txt
 python curate_dataset.py stories/*.txt
 ```
 
-Review candidates in the studio's **Dataset** tab: each one shows the source passage and an
-editable caption, with Accept (optionally after editing) or Reject. Accepted captions go to
-`data/caption_pairs_curated.jsonl` - the clean dataset `train_captioner.py` trains on by
-default. It currently holds 2,000 reviewed examples across ~250 short original stories
-(`stories/*.txt`), spanning a deliberately wide range of settings and character names.
+Review candidates in the studio's **Dataset** tab: each one shows the source passage, an
+editable caption, and a camera dropdown, with Accept (optionally after editing either) or
+Reject. Accepted examples go to `data/caption_pairs_curated.jsonl` - the clean dataset
+`train_captioner.py` trains on by default. It currently holds 2,010 examples across the full
+`stories/*.txt` corpus (337 short original stories, one skipped as too short to segment),
+spanning a deliberately wide range of settings and character names - each with a real,
+teacher-labeled camera hint rather than the flat keyword heuristic.
+
+This full-corpus batch was curated by an automated accept gate (the same embedding-similarity
+grounding filter `train_captioner.py` already applies at training time, `min_similarity=0.35`)
+rather than the one-by-one manual review the first 2,000-example set got - reviewing 2,000+
+examples by hand isn't practical to redo per dataset change. All 2,010 candidates passed the
+0.35 threshold; the raw pre-filter harvest is kept at
+`data/caption_candidates_camera_harvested.jsonl` as a queue for a future manual review pass, if
+the automated gate's quality bar turns out not to be enough. The previous hand-reviewed
+(caption-only, no camera field) dataset is recoverable from git history (the commit that added
+it), and the prior captioner adapter is kept locally at `models/captioner_precamera_backup/`
+(gitignored, not in version control) for a quick rollback.
 
 ## Repository layout
 

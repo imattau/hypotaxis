@@ -110,12 +110,27 @@ function renderCandidateQueue(holder, resp) {
     return;
   }
   const candidate = resp.candidates[0];
+  // mirrors CAMERA_HINTS in manga_pipeline/train_captioner.py
+  const CAMERA_HINTS = [
+    "extreme close-up",
+    "close-up",
+    "medium shot",
+    "wide two-shot",
+    "wide establishing shot",
+    "over-the-shoulder",
+    "bird's-eye view",
+  ];
+  const candidateCamera = CAMERA_HINTS.includes(candidate.camera) ? candidate.camera : CAMERA_HINTS[2];
   const card = el(`
     <div class="card">
       <label>Source passage${candidate.characters && candidate.characters.length ? ` (characters: ${escapeHtml(candidate.characters.join(", "))})` : ""}</label>
       <div class="desc">${escapeHtml(candidate.input)}</div>
       <label>Candidate caption</label>
       <textarea id="candidate-target">${escapeHtml(candidate.target)}</textarea>
+      <label>Camera</label>
+      <select id="candidate-camera">
+        ${CAMERA_HINTS.map((h) => `<option value="${escapeHtml(h)}"${h === candidateCamera ? " selected" : ""}>${escapeHtml(h)}</option>`).join("")}
+      </select>
       <div class="row panel-edit-actions">
         <button class="btn" id="candidate-accept">Accept</button>
         <button class="btn secondary danger" id="candidate-reject">Reject</button>
@@ -133,7 +148,10 @@ function renderCandidateQueue(holder, resp) {
       await api(`/api/dataset/candidates/${candidate.index}/accept`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target: card.querySelector("#candidate-target").value }),
+        body: JSON.stringify({
+          target: card.querySelector("#candidate-target").value,
+          camera: card.querySelector("#candidate-camera").value,
+        }),
       });
       showDatasetCuration();
     } catch (e) {
@@ -221,7 +239,7 @@ function showNewStory() {
       <textarea id="f-prop-profiles" placeholder="Letter: a folded handwritten letter with a wax seal&#10;Key: a small tarnished brass key on a frayed ribbon" style="min-height:100px"></textarea>
       <div class="status-line">Small portable objects, not whole settings. Kept separate from locations — a prop's description is woven into the panel's prompt wherever it's mentioned, not used as an image reference like locations/characters.</div>
       <label><input type="checkbox" id="f-use-captioner" style="width:auto;display:inline-block;margin-right:6px;" />Use trained captioner instead of the bridge LLM for panel captions</label>
-      <div class="status-line">Faster and lighter on VRAM, but only available once you've trained one (see README's "Curating a clean caption dataset"). Camera framing still uses the built-in heuristic either way.</div>
+      <div class="status-line">Faster and lighter on VRAM, but only available once you've trained one (see README's "Curating a clean caption dataset"). A captioner trained on the camera-aware dataset predicts its own shot framing directly; an older adapter falls back to the built-in heuristic.</div>
       <button class="btn" id="f-submit">Adapt Story (Stage A)</button>
       <div class="status-line" id="f-status"></div>
     </div>

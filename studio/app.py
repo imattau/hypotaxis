@@ -33,6 +33,7 @@ from manga_pipeline.pipeline import prepare_cast as prepare_cast_pipeline  # noq
 from manga_pipeline.pipeline import run as run_pipeline  # noqa: E402
 from manga_pipeline.registry import CharacterRegistry  # noqa: E402
 from manga_pipeline.schema import DialogueLine, Panel, Story  # noqa: E402
+from manga_pipeline.train_captioner import CAMERA_HINTS  # noqa: E402
 from manga_pipeline.story_adapt import (  # noqa: E402
     adapt_story,
     parse_character_profiles,
@@ -704,6 +705,7 @@ def list_candidates(limit: int = 20):
 class CandidateDecision(BaseModel):
     target: str | None = None  # edited caption text; None keeps the candidate's own target
     characters: list[str] | None = None
+    camera: str | None = None  # edited camera hint; None keeps the candidate's own camera
 
 
 @app.post("/api/dataset/candidates/{index}/accept")
@@ -712,10 +714,14 @@ def accept_candidate(index: int, decision: CandidateDecision):
     if not 0 <= index < len(candidates):
         raise HTTPException(404, "candidate not found")
     candidate = candidates.pop(index)
+    camera = decision.camera if decision.camera is not None else candidate.get("camera")
+    if camera not in CAMERA_HINTS:
+        raise HTTPException(400, f"camera must be one of {CAMERA_HINTS}")
     curated = {
         "input": candidate["input"],
         "characters": decision.characters if decision.characters is not None else candidate.get("characters", []),
         "target": decision.target.strip() if decision.target is not None else candidate["target"],
+        "camera": camera,
     }
     if not curated["target"]:
         raise HTTPException(400, "caption text cannot be empty")

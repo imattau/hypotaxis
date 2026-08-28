@@ -1,11 +1,129 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from .llm import get_embedder
 
 _TASK_PREFIX = "caption: "
+
+CAMERA_HINTS = [
+    "extreme close-up",
+    "close-up",
+    "medium shot",
+    "wide two-shot",
+    "wide establishing shot",
+    "over-the-shoulder",
+    "bird's-eye view",
+]
+
+
+def guess_camera_hint(chunk: str, character_count: int) -> str:
+    """Keyword-based fallback, used when neither the bridge LLM's own camera
+    suggestion nor a trained captioner's CAMERA line (see
+    parse_caption_and_camera) is present or recognized - a small model
+    doesn't always follow a response format exactly, and this keeps Stage A
+    from failing or defaulting to a flat 'medium shot' every time that
+    happens."""
+    lowered = chunk.lower()
+    if "close" in lowered or "hand" in lowered or "eyes" in lowered:
+        return "close-up"
+    if character_count >= 2:
+        return "wide two-shot"
+    if "stood" in lowered or "stands" in lowered or "platform" in lowered or "room" in lowered:
+        return "wide establishing shot"
+    return "medium shot"
+
+
+_CAPTION_LEAK_MARKERS = (
+    "do not invent",
+    "do not include dialogue",
+    "do not add characters",
+    "under 25 words",
+    "describing only the setting",
+)
+
+_SCREENPLAY_SLUG_RE = re.compile(
+    r"^(?:EXT\.|INT\.|EXT/INT\.|WIDE|MEDIUM|CLOSE[- ]UP)[A-Z0-9 .,'-]*:\s*", re.IGNORECASE
+)
+
+
+def _sanitize_caption(caption: str) -> str:
+    """Guards against a known small-model failure mode: echoing its own
+    prompt instructions back as if they were part of the caption (found on
+    a real manuscript panel - the response literally contained "...Do not
+    invent objects, locations, or events not in the passage."). Truncates
+    at the first sign of leaked instruction text and backs up to the last
+    complete sentence, rather than feeding that text straight through to
+    the image generation prompt. Also strips a screenplay-slug-style prefix
+    ("EXT. WIDE ESTABLISHING SHOT:") the model sometimes invents.
+    """
+    cleaned = _SCREENPLAY_SLUG_RE.sub("", caption).strip()
+
+    lowered = cleaned.lower()
+    cut = len(cleaned)
+    for marker in _CAPTION_LEAK_MARKERS:
+        idx = lowered.find(marker)
+        if idx != -1:
+            cut = min(cut, idx)
+    if cut < len(cleaned):
+        truncated = cleaned[:cut]
+        # back up to the last complete sentence so we don't leave a
+        # dangling fragment ("...following a soft pause. One sentence,")
+        last_end = max(truncated.rfind("."), truncated.rfind("!"), truncated.rfind("?"))
+        cleaned = truncated[: last_end + 1].strip() if last_end != -1 else truncated.strip()
+
+    return cleaned or caption.strip()
+
+
+_CAMERA_FIELD_RE = re.compile(r"camera:\s*([^\n]*)", re.IGNORECASE)
+
+
+def parse_caption_and_camera(response: str, chunk: str, character_count: int) -> tuple[str, str]:
+    """Parses a "CAPTION: ...\\nCAMERA: ..." response (see _CAPTION_PROMPT in
+    story_adapt.py, and the same two-line format a trained captioner is
+    fine-tuned to emit - see Captioner.generate) into (caption, camera_hint).
+    Shared between the bridge-LLM path and the trained-captioner path so
+    both get identical, content-aware camera framing from the same call that
+    already produces the caption, instead of the flat keyword heuristic
+    guess_camera_hint() alone.
+
+    Defensive by design: a small model doesn't always follow the format
+    exactly, so an unrecognized or missing camera value falls back to
+    guess_camera_hint() rather than ever blocking Stage A or accepting a
+    hallucinated camera term. Notably, a fine-tuned T5-base captioner was
+    found (via real generation, not just eval loss) to reliably learn the
+    "CAPTION: ... CAMERA: ..." field order but not the literal newline
+    between them - it collapses both onto one line. Matching "camera:"
+    anywhere in the response (not just at the start of its own line) so that
+    real, correct model output isn't silently discarded in favor of the
+    heuristic fallback.
+    """
+    match = _CAMERA_FIELD_RE.search(response)
+    camera_hint: str | None = None
+    remainder = response
+    if match:
+        candidate = match.group(1).strip().lower().rstrip(".")
+        if candidate in CAMERA_HINTS:
+            camera_hint = candidate
+        remainder = response[: match.start()] + response[match.end() :]
+
+    caption_parts: list[str] = []
+    for line in remainder.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered.startswith("caption:"):
+            caption_parts.append(line.split(":", 1)[1].strip())
+        else:
+            caption_parts.append(line)
+
+    caption = _sanitize_caption(" ".join(caption_parts).strip() or response.strip())
+    if camera_hint is None:
+        camera_hint = guess_camera_hint(chunk, character_count)
+    return caption, camera_hint
 
 
 def load_pairs(path: str | Path) -> list[dict]:
@@ -39,11 +157,21 @@ def filter_grounded(records: list[dict], min_similarity: float = 0.35) -> list[d
 
 
 def to_examples(records: list[dict]) -> list[dict]:
+    """Builds the (source, target) training pairs. target is the same
+    two-line "CAPTION: ...\\nCAMERA: ..." format the bridge LLM prompt uses
+    (see parse_caption_and_camera) - a record without a "camera" field
+    (pre-camera-harvest data) falls back to guess_camera_hint() over its raw
+    "input" text so every example still trains a well-formed two-line
+    target, rather than teaching the model to sometimes emit a blank
+    CAMERA: line.
+    """
     examples = []
     for r in records:
         characters = ", ".join(r.get("characters", [])) or "none"
         source = f"{_TASK_PREFIX}characters: {characters}\n{r['input']}"
-        examples.append({"source": source, "target": r["target"]})
+        camera = r.get("camera") or guess_camera_hint(r["input"], len(r.get("characters", [])))
+        target = f"CAPTION: {r['target']}\nCAMERA: {camera}"
+        examples.append({"source": source, "target": target})
     return examples
 
 

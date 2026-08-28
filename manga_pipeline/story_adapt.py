@@ -12,6 +12,7 @@ from .layouts import LAYOUTS
 from .llm import SmallLLM, get_embedder
 from .registry import CharacterRegistry
 from .schema import DialogueLine, Page, Panel, Story
+from .train_captioner import parse_caption_and_camera
 
 _REPORTING_VERBS = {
     "say", "ask", "reply", "whisper", "shout", "call", "murmur", "mutter", "cry",
@@ -546,107 +547,11 @@ def split_dialogue(
     return lines
 
 
-_CAMERA_HINTS = [
-    "extreme close-up",
-    "close-up",
-    "medium shot",
-    "wide two-shot",
-    "wide establishing shot",
-    "over-the-shoulder",
-    "bird's-eye view",
-]
-
-
-def guess_camera_hint(chunk: str, character_count: int) -> str:
-    """Keyword-based fallback, used when the LLM's own camera suggestion
-    (see _parse_caption_response) is missing or unrecognized - a small
-    model doesn't always follow a response format exactly, and this keeps
-    Stage A from failing or defaulting to a flat 'medium shot' every time
-    that happens."""
-    lowered = chunk.lower()
-    if "close" in lowered or "hand" in lowered or "eyes" in lowered:
-        return "close-up"
-    if character_count >= 2:
-        return "wide two-shot"
-    if "stood" in lowered or "stands" in lowered or "platform" in lowered or "room" in lowered:
-        return "wide establishing shot"
-    return "medium shot"
-
-
-_CAPTION_LEAK_MARKERS = (
-    "do not invent",
-    "do not include dialogue",
-    "do not add characters",
-    "under 25 words",
-    "describing only the setting",
-)
-
-_SCREENPLAY_SLUG_RE = re.compile(
-    r"^(?:EXT\.|INT\.|EXT/INT\.|WIDE|MEDIUM|CLOSE[- ]UP)[A-Z0-9 .,'-]*:\s*", re.IGNORECASE
-)
-
-
-def _sanitize_caption(caption: str) -> str:
-    """Guards against a known small-model failure mode: echoing its own
-    prompt instructions back as if they were part of the caption (found on
-    a real manuscript panel - the response literally contained "...Do not
-    invent objects, locations, or events not in the passage."). Truncates
-    at the first sign of leaked instruction text and backs up to the last
-    complete sentence, rather than feeding that text straight through to
-    the image generation prompt. Also strips a screenplay-slug-style prefix
-    ("EXT. WIDE ESTABLISHING SHOT:") the model sometimes invents.
-    """
-    cleaned = _SCREENPLAY_SLUG_RE.sub("", caption).strip()
-
-    lowered = cleaned.lower()
-    cut = len(cleaned)
-    for marker in _CAPTION_LEAK_MARKERS:
-        idx = lowered.find(marker)
-        if idx != -1:
-            cut = min(cut, idx)
-    if cut < len(cleaned):
-        truncated = cleaned[:cut]
-        # back up to the last complete sentence so we don't leave a
-        # dangling fragment ("...following a soft pause. One sentence,")
-        last_end = max(truncated.rfind("."), truncated.rfind("!"), truncated.rfind("?"))
-        cleaned = truncated[: last_end + 1].strip() if last_end != -1 else truncated.strip()
-
-    return cleaned or caption.strip()
-
-
-def _parse_caption_response(response: str, chunk: str, character_count: int) -> tuple[str, str]:
-    """Parses the LLM's "CAPTION: ...\\nCAMERA: ..." response (see
-    _CAPTION_PROMPT) into (caption, camera_hint). Content-aware camera
-    framing from the same call that already writes the caption, instead of
-    the flat keyword heuristic guess_camera_hint() used to be stuck with -
-    no extra LLM call needed since this piggybacks on the existing one.
-
-    Defensive by design: a 3B model doesn't always follow a two-line format
-    exactly, so any line not explicitly prefixed "CAMERA:" is treated as
-    caption text, and an unrecognized or missing camera value falls back to
-    guess_camera_hint() rather than ever blocking Stage A or accepting a
-    hallucinated camera term.
-    """
-    caption_parts: list[str] = []
-    camera_hint: str | None = None
-    for line in response.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        lowered = line.lower()
-        if lowered.startswith("camera:"):
-            candidate = line.split(":", 1)[1].strip().lower().rstrip(".")
-            if candidate in _CAMERA_HINTS:
-                camera_hint = candidate
-        elif lowered.startswith("caption:"):
-            caption_parts.append(line.split(":", 1)[1].strip())
-        else:
-            caption_parts.append(line)
-
-    caption = _sanitize_caption(" ".join(caption_parts).strip() or response.strip())
-    if camera_hint is None:
-        camera_hint = guess_camera_hint(chunk, character_count)
-    return caption, camera_hint
+# camera-hint keyword fallback and CAPTION:/CAMERA: response parsing now
+# live in train_captioner.py (as CAMERA_HINTS / guess_camera_hint /
+# parse_caption_and_camera) - shared with Captioner.generate() so the
+# trained-captioner path gets the same content-aware camera framing as the
+# bridge-LLM path below, not just the flat keyword heuristic.
 
 
 def _merge_panel(base: Panel, extra: Panel) -> Panel:
@@ -743,12 +648,14 @@ def adapt_story(
     train_captioner.py) - when given, used instead of prompting the full
     bridge LLM for each panel's caption. Much faster and lighter on VRAM
     than an instruct-model prompt per panel, once a curated dataset exists
-    to train it from (see README's "Curating a clean caption dataset").
-    Camera framing still falls back to the guess_camera_hint() keyword
-    heuristic in this path, since the captioner was fine-tuned purely on
-    caption text and never saw the bridge LLM's two-line CAPTION/CAMERA
-    response format. Character descriptions still go through `llm` either
-    way - the captioner was never trained for that task.
+    to train it from (see README's "Curating a clean caption dataset"). If
+    the captioner was fine-tuned on the CAPTION:/CAMERA: joint target format
+    it produces content-aware camera framing directly (see Captioner.generate);
+    otherwise (an older adapter trained on caption-only targets) it falls
+    back to the guess_camera_hint() keyword heuristic the same way the
+    bridge-LLM path does when its own CAMERA: line is missing or
+    unrecognized. Character descriptions still go through `llm` either way -
+    the captioner was never trained for that task.
 
     on_progress: optional callback invoked with a short human-readable status
     string as chunks are processed - purely cosmetic (e.g. for a UI progress
@@ -845,8 +752,7 @@ def adapt_story(
         character_notes = "; ".join(f"{name} ({registry.get(name).description})" for name in characters)
         caption_input = _caption_input(chunk, character_notes)
         if captioner is not None:
-            caption = captioner.generate(caption_input, characters)
-            camera_hint = guess_camera_hint(chunk, len(characters))
+            caption, camera_hint = captioner.generate(caption_input, characters, chunk, len(characters))
         else:
             # kept as a separate prompt field rather than folded into the passage text -
             # when it was part of "Passage", the tiny LLM tended to fixate on restating
@@ -857,11 +763,11 @@ def adapt_story(
                 ),
                 max_new_tokens=80,
             )
-            caption, camera_hint = _parse_caption_response(raw_response, chunk, len(characters))
+            caption, camera_hint = parse_caption_and_camera(raw_response, chunk, len(characters))
             if dataset_path is not None:
                 _append_jsonl(
                     dataset_path,
-                    {"input": caption_input, "characters": characters, "target": caption},
+                    {"input": caption_input, "characters": characters, "target": caption, "camera": camera_hint},
                 )
 
         chunk_doc = get_nlp()(chunk) if ('"' in chunk or _THOUGHT_RE.search(chunk)) else None

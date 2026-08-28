@@ -15,12 +15,9 @@ from manga_pipeline.story_adapt import (
     _caption_input,
     _merge_person_aliases,
     _normalize_quotes,
-    _parse_caption_response,
-    _sanitize_caption,
     _split_on_scene_breaks,
     _strip_markdown_structure,
     get_nlp,
-    guess_camera_hint,
     names_in_chunk,
     pack_into_pages,
     parse_character_profiles,
@@ -29,6 +26,7 @@ from manga_pipeline.story_adapt import (
     split_sentences,
 )
 from manga_pipeline.schema import DialogueLine, Panel
+from manga_pipeline.train_captioner import _sanitize_caption, guess_camera_hint, parse_caption_and_camera
 
 
 def test_caption_input_appends_known_appearances_when_present():
@@ -195,32 +193,32 @@ def test_sanitize_caption_never_returns_empty():
     assert _sanitize_caption("Do not invent anything at all.") != ""
 
 
-def test_parse_caption_response_well_formed():
+def test_parse_caption_and_camera_well_formed():
     response = "CAPTION: Jules stares out the window.\nCAMERA: close-up"
-    caption, camera = _parse_caption_response(response, "chunk text", 1)
+    caption, camera = parse_caption_and_camera(response, "chunk text", 1)
     assert caption == "Jules stares out the window."
     assert camera == "close-up"
 
 
-def test_parse_caption_response_missing_caption_prefix():
+def test_parse_caption_and_camera_missing_caption_prefix():
     # a 3B model doesn't always follow the two-line format exactly - an
     # unprefixed line must still be treated as caption text, not dropped
     response = "Jules stares out the window.\nCAMERA: wide two-shot"
-    caption, camera = _parse_caption_response(response, "chunk text", 2)
+    caption, camera = parse_caption_and_camera(response, "chunk text", 2)
     assert caption == "Jules stares out the window."
     assert camera == "wide two-shot"
 
 
-def test_parse_caption_response_unknown_camera_falls_back_to_heuristic():
+def test_parse_caption_and_camera_unknown_camera_falls_back_to_heuristic():
     response = "CAPTION: Jules stares out the window.\nCAMERA: dutch angle drone shot"
-    caption, camera = _parse_caption_response(response, "she stood in the room", 1)
+    caption, camera = parse_caption_and_camera(response, "she stood in the room", 1)
     assert caption == "Jules stares out the window."
     assert camera == guess_camera_hint("she stood in the room", 1)
 
 
-def test_parse_caption_response_missing_camera_line_falls_back_to_heuristic():
+def test_parse_caption_and_camera_missing_camera_line_falls_back_to_heuristic():
     response = "CAPTION: Jules stares out the window."
-    caption, camera = _parse_caption_response(response, "she stood in the room", 1)
+    caption, camera = parse_caption_and_camera(response, "she stood in the room", 1)
     assert caption == "Jules stares out the window."
     assert camera == guess_camera_hint("she stood in the room", 1)
 

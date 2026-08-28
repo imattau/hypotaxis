@@ -10,6 +10,7 @@ from __future__ import annotations
 from manga_pipeline.backends import (
     DiffusersBackend,
     _abstract_character_note,
+    _build_prompt,
     _dominant,
     _dominant_character,
     _dominant_location,
@@ -66,6 +67,53 @@ def test_prop_notes_only_includes_panel_tagged_props(tmp_path):
 def test_prop_notes_handles_missing_registry():
     panel = Panel(scene_description="x", props=["Letter"])
     assert _prop_notes(panel, None) == ""
+
+
+def test_build_prompt_includes_camera_hint_between_style_and_scene():
+    panel = Panel(scene_description="Aiko stares out the window", camera_hint="close-up")
+    assert (
+        _build_prompt("manga style, ink wash", panel, None)
+        == "manga style, ink wash, close-up, Aiko stares out the window"
+    )
+
+
+def test_build_prompt_includes_camera_hint_without_style_prompt():
+    panel = Panel(scene_description="a train pulls into the station", camera_hint="medium shot")
+    assert _build_prompt("", panel, None) == "medium shot, a train pulls into the station"
+
+
+def test_build_prompt_expands_camera_hints_known_to_need_it():
+    # found via real generation comparisons: sdxl-turbo mostly ignores the
+    # terse two-to-three-word form of these hints at production steps/
+    # guidance settings - see _CAMERA_HINT_PROMPT_EXPANSIONS
+    panel = Panel(scene_description="they talk in the hallway", camera_hint="wide establishing shot")
+    prompt = _build_prompt("", panel, None)
+    assert prompt.startswith("wide establishing shot, entire room visible")
+    assert prompt.endswith("they talk in the hallway")
+
+
+def test_build_prompt_leaves_unexpanded_camera_hints_as_is():
+    # extreme close-up/close-up/medium shot already render correctly from
+    # the terse hint alone, so they're deliberately not in the expansion table
+    panel = Panel(scene_description="x", camera_hint="extreme close-up")
+    assert _build_prompt("", panel, None) == "extreme close-up, x"
+
+
+def test_build_prompt_passes_through_unrecognized_camera_hint():
+    # a custom/legacy value not in CAMERA_HINTS or the expansion table must
+    # not crash - falls through unchanged, same as before this table existed
+    panel = Panel(scene_description="x", camera_hint="dutch angle")
+    assert _build_prompt("", panel, None) == "dutch angle, x"
+
+
+def test_build_prompt_appends_prop_notes_after_camera_hint(tmp_path):
+    registry = CharacterRegistry(tmp_path / "props.json")
+    registry.set_description("Letter", "a folded letter with a wax seal")
+    panel = Panel(scene_description="x", camera_hint="close-up", props=["Letter"])
+    assert (
+        _build_prompt("manga style", panel, registry)
+        == "manga style, close-up, x, featuring Letter (a folded letter with a wax seal)"
+    )
 
 
 def test_abstract_character_note_formats_name_and_description(tmp_path):
