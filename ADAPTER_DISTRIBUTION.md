@@ -69,6 +69,9 @@ runtime CDN dependency, which keeps the desktop wrapper usable offline after
 the UI assets have been built.
 CI rebuilds the bundle and checks for a clean diff, so changes to
 `studio/static/app.js` cannot silently ship with stale browser output.
+GitHub Actions also runs a separate Ubuntu job with the optional distribution
+dependencies installed, exercising the real Schnorr, relay, and BitTorrent
+integration paths in addition to the lightweight compatibility tests.
 
 Studio's Community Discovery form now queries user-supplied relays and displays
 release metadata after browser-side Nostr signature verification.
@@ -76,6 +79,8 @@ It can also load the signed NIP-65 kind-10002 read-relay list for the current
 NIP-07 identity, using the manually entered relays as bootstrap sources.
 Discovery keeps only the newest verified event for each creator and parameterized
 adapter identity, avoiding duplicate cards for superseded release versions.
+Equal timestamps are resolved by event ID, making relay ordering unable to change
+which replaceable record is selected.
 
 When a discovered release advertises Blossom mirrors, Studio can now request a
 verified install. The request must include the complete signed Nostr release

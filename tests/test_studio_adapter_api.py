@@ -247,6 +247,26 @@ def test_discover_adapters_returns_newest_parameterized_release(monkeypatch):
     assert result["releases"][0]["manifest"]["version"] == "1.1.0"
 
 
+def test_discover_adapters_breaks_created_at_ties_by_event_id(monkeypatch):
+    from manga_pipeline.adapter_distribution import build_release_event
+
+    manifest = {
+        "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0", "base_model": "base", "license": "MIT",
+        "files": [{"path": "x.bin", "sha256": "a" * 64}],
+    }
+    first = build_release_event(manifest, "1" * 64, 123)
+    first["sig"] = "2" * 128
+    second = build_release_event({**manifest, "version": "1.1.0"}, "1" * 64, 123)
+    second["sig"] = "2" * 128
+    monkeypatch.setattr(studio_app, "schnorr_available", lambda: False)
+    monkeypatch.setattr(studio_app, "query_nostr_relays", lambda *_args, **_kwargs: [first, second])
+
+    result = studio_app.discover_adapters(studio_app.DiscoverAdaptersRequest(relays=["wss://relay.example"]))
+
+    expected = max(first, second, key=lambda event: event["id"])
+    assert result["releases"][0]["event_id"] == expected["id"]
+
+
 def test_discover_adapters_returns_verified_compositions(monkeypatch):
     from manga_pipeline.adapter_distribution import build_composition, build_composition_event
 

@@ -105,8 +105,8 @@ def _verify_release_signature(event: dict) -> bool:
 def _attach_label_summaries(items: list[dict], label_events: list[dict]) -> None:
     """Attach verified rating/report summaries to discovered artifacts."""
 
-    ratings: dict[tuple[str, str], tuple[int, int]] = {}
-    reports: dict[tuple[str, str, str], int] = {}
+    ratings: dict[tuple[str, str], tuple[int, int, str]] = {}
+    reports: dict[tuple[str, str, str], tuple[int, str]] = {}
     for event in label_events:
         target = next((tag[1] for tag in event.get("tags", []) if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "e"), None)
         kind_tag = next((tag[1] for tag in event.get("tags", []) if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "k"), None)
@@ -121,15 +121,15 @@ def _attach_label_summaries(items: list[dict], label_events: list[dict]) -> None
                 value = 0
             if 1 <= value <= 5:
                 key = (target, event["pubkey"])
-                if key not in ratings or event["created_at"] > ratings[key][1]:
-                    ratings[key] = (value, event["created_at"])
+                if key not in ratings or (event["created_at"], event["id"]) > (ratings[key][1], ratings[key][2]):
+                    ratings[key] = (value, event["created_at"], event["id"])
         if report is not None and isinstance(report[1], str) and re.fullmatch(r"[a-z0-9][a-z0-9._:-]{1,63}", report[1]):
             key = (target, event["pubkey"], report[1])
-            if key not in reports or event["created_at"] > reports[key]:
-                reports[key] = event["created_at"]
+            if key not in reports or (event["created_at"], event["id"]) > reports[key]:
+                reports[key] = (event["created_at"], event["id"])
     for item in items:
         target = item["event_id"]
-        values = [value for (event_id, _author), (value, _created_at) in ratings.items() if event_id == target]
+        values = [value for (event_id, _author), (value, _created_at, _event_id) in ratings.items() if event_id == target]
         reasons = sorted(reason for (event_id, _author, reason) in reports if event_id == target)
         item.update({
             "rating_average": sum(values) / len(values) if values else None,
@@ -679,7 +679,7 @@ def discover_adapters(req: DiscoverAdaptersRequest):
             "manifest": manifest,
         }
         previous = releases_by_address.get(key)
-        if previous is None or event["created_at"] > previous["_created_at"]:
+        if previous is None or (event["created_at"], event["id"]) > (previous["_created_at"], previous["event"]["id"]):
             releases_by_address[key] = {**release, "event": event, "_created_at": event["created_at"]}
     releases = [{key: value for key, value in release.items() if key != "_created_at"} for release in releases_by_address.values()]
     compositions_by_address = {}
@@ -696,7 +696,7 @@ def discover_adapters(req: DiscoverAdaptersRequest):
         address = next((tag[1] for tag in event.get("tags", []) if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "d"), f"composition:{composition['name']}")
         key = f"{event['pubkey']}:{address}"
         previous = compositions_by_address.get(key)
-        if previous is None or event["created_at"] > previous["_created_at"]:
+        if previous is None or (event["created_at"], event["id"]) > (previous["_created_at"], previous["event_id"]):
             compositions_by_address[key] = {"event_id": event["id"], "creator_pubkey": event["pubkey"], "signature_verified": signature_verified, "composition": composition, "_created_at": event["created_at"]}
     compositions = [{key: value for key, value in item.items() if key != "_created_at"} for item in compositions_by_address.values()]
     revocable = releases + compositions

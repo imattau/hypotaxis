@@ -539,14 +539,18 @@ def test_install_from_blossom_does_not_leave_partial_bundle(tmp_path):
     assert list((tmp_path / "installed").glob(".adapter-install-*")) == []
 
 
-def test_torrent_backend_is_optional_when_libtorrent_is_missing(tmp_path):
-    if torrent_available():
-        pytest.skip("libtorrent is installed in this environment")
-    assert torrent_available() is False
-    with pytest.raises(TorrentUnavailableError, match="libtorrent"):
-        create_torrent(tmp_path, tmp_path / "adapter.torrent")
-    with pytest.raises(TorrentUnavailableError, match="libtorrent"):
-        download_torrent("magnet:?xt=urn:btih:abc", tmp_path, _manifest())
+def test_torrent_backend_availability_contract(tmp_path):
+    if not torrent_available():
+        with pytest.raises(TorrentUnavailableError, match="libtorrent"):
+            create_torrent(tmp_path, tmp_path / "adapter.torrent")
+        with pytest.raises(TorrentUnavailableError, match="libtorrent"):
+            download_torrent("magnet:?xt=urn:btih:abc", tmp_path, _manifest())
+        return
+
+    source = tmp_path / "grounding-1.0.0"
+    source.mkdir()
+    (source / "adapter_model.safetensors").write_bytes(b"weights")
+    assert create_torrent(source, tmp_path / "adapter.torrent").exists()
 
 
 @pytest.mark.skipif(not torrent_available(), reason="optional libtorrent is not installed")
