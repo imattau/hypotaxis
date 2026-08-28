@@ -254,3 +254,36 @@ def test_activate_character_lora_disables_when_switching_to_no_lora(tmp_path):
     backend._activate_character_lora(None, None)
 
     assert backend._base_pipe.disable_calls == 1
+
+
+# ---------- DiffusersBackend._generate_with_pose_controlnet ----------
+
+
+class _FakePosePipe:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+
+        class _Result:
+            images = ["fake-image"]
+
+        return _Result()
+
+
+def test_generate_with_pose_controlnet_passes_configured_scale():
+    cfg = PipelineConfig(use_pose_controlnet=True, pose_controlnet_scale=0.5)
+    backend = DiffusersBackend(cfg)
+    backend._pose_pipe = _FakePosePipe()  # bypasses _load_pose_pipe's real model download
+
+    image = backend._generate_with_pose_controlnet("a prompt", count=2, width=512, height=256, generator=None)
+
+    assert image == "fake-image"
+    assert len(backend._pose_pipe.calls) == 1
+    call = backend._pose_pipe.calls[0]
+    assert call["prompt"] == "a prompt"
+    assert call["controlnet_conditioning_scale"] == 0.5
+    assert call["width"] == 512
+    assert call["height"] == 256
+    assert call["image"].size == (512, 256)

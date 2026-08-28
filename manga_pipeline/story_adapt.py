@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from .captioner import Captioner
-from .layouts import LAYOUTS
+from .layouts import LAYOUTS, is_wide_box
 from .llm import SmallLLM, get_embedder
 from .registry import CharacterRegistry
 from .schema import DialogueLine, Page, Panel, Story
@@ -28,6 +28,22 @@ for _name, _boxes in LAYOUTS.items():
 # everything into one big grid just because the count happens to divide evenly
 _SUPPORTED_COUNTS = [c for c in (3, 4, 2, 9) if c in _TEMPLATES_BY_COUNT]
 _DATASET_LOCK = threading.Lock()
+
+# the two camera hints found (via a real page-generation test) to need a
+# landscape-oriented box - see is_wide_box(). over-the-shoulder/bird's-eye
+# view/close-up/medium shot aren't here: nothing in real testing showed them
+# needing a wide box specifically, only these two.
+_WIDE_CAMERA_HINTS = {"wide two-shot", "wide establishing shot"}
+
+
+def _layout_fits(layout: str, group: list[Panel]) -> bool:
+    """True if every panel in `group` that needs a wide box (see
+    _WIDE_CAMERA_HINTS) actually gets one from this layout, matched by
+    position - pipeline.run() zips a page's panels with boxes_for(layout) in
+    the same reading order, so box i is where panel i actually renders."""
+    return all(
+        panel.camera_hint not in _WIDE_CAMERA_HINTS or is_wide_box(box) for panel, box in zip(group, LAYOUTS[layout])
+    )
 _MAX_SEGMENT_SENTENCES = 1500
 
 
@@ -585,7 +601,13 @@ def pack_into_pages(panels: list[Panel]) -> list[Page]:
     pages = []
     for page_index, group in enumerate(groups):
         templates = _TEMPLATES_BY_COUNT[len(group)]
-        layout = templates[page_index % len(templates)]
+        # prefer a template whose box shapes actually fit this group's
+        # camera hints (see _layout_fits) - falls back to every template of
+        # this count if none fit (e.g. a wide-shot panel in a page size that
+        # has no landscape-oriented box at all), same as before this existed
+        fitting = [t for t in templates if _layout_fits(t, group)]
+        candidates = fitting or templates
+        layout = candidates[page_index % len(candidates)]
         pages.append(Page(layout=layout, panels=group))
     return pages
 

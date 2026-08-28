@@ -57,3 +57,21 @@ class PipelineConfig:
     # identity signal once someone has invested the training time.
     use_character_lora: bool = False
     character_lora_scale: float = 0.8
+    # opt-in pose-ControlNet conditioning for multi-character panels (see
+    # manga_pipeline/pose_skeleton.py) - off by default since it loads a
+    # wholly separate SDXL pipeline (the ControlNet checkpoint needs full
+    # SDXL, not the lighter cfg.checkpoint default) at ~7-8x the per-image
+    # cost of the normal path. Found via real generation comparisons that no
+    # amount of "exactly two people" prompt wording reliably stopped SDXL
+    # from dropping or duplicating figures in a panel with 2+ tagged
+    # characters (see DiffusersBackend._resolve_target: identity
+    # conditioning is already skipped entirely for such panels, since
+    # blending multiple identities is a separate unsolved problem) - a
+    # synthetic pose skeleton with exactly the right figure count fixed
+    # that specific failure reliably where prompt tuning couldn't.
+    # pose_controlnet_scale=0.5 was the better of two tested values (0.5 vs
+    # 0.65): strong enough to lock headcount/position, loose enough that the
+    # text prompt still drives which figure looks like which gender/character
+    # rather than the model defaulting both figures to the same look.
+    use_pose_controlnet: bool = False
+    pose_controlnet_scale: float = 0.5

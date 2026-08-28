@@ -823,10 +823,28 @@ function renderGeneratePanel(storyId) {
           <label>LoRA scale</label>
           <input type="number" id="g-char-lora-scale" value="0.8" min="0" max="2" step="0.05" />
         </div>
+        <div>
+          <label>Pose ControlNet</label>
+          <select id="g-pose-controlnet">
+            <option value="false">off</option>
+            <option value="true">on</option>
+          </select>
+        </div>
+        <div>
+          <label>Pose scale</label>
+          <input type="number" id="g-pose-controlnet-scale" value="0.5" min="0" max="2" step="0.05" />
+        </div>
       </div>
       <div class="status-line">
         Character LoRA only affects characters you've trained one for (see the character cards
         above) - anyone else still falls back to identity adapter conditioning.
+      </div>
+      <div class="status-line">
+        Pose ControlNet only affects panels tagged with 2+ characters (identity adapter and
+        character LoRA already skip those, since blending multiple identities isn't solved) -
+        it fixes SDXL dropping/duplicating figures in such a panel, at real extra cost: a
+        separate full SDXL pipeline loaded on first use, ~7-8x slower per affected panel than
+        the normal path. Doesn't control which figure looks like which character.
       </div>
       <label><input type="checkbox" id="g-force" style="width:auto;display:inline-block;margin-right:6px;" />Regenerate existing pages too</label>
       <div class="status-line">
@@ -849,6 +867,8 @@ async function startGeneration(storyId) {
   const identity_adapter_scale = parseFloat(document.getElementById("g-scale").value);
   const use_character_lora = document.getElementById("g-char-lora").value === "true";
   const character_lora_scale = parseFloat(document.getElementById("g-char-lora-scale").value);
+  const use_pose_controlnet = document.getElementById("g-pose-controlnet").value === "true";
+  const pose_controlnet_scale = parseFloat(document.getElementById("g-pose-controlnet-scale").value);
   const force = document.getElementById("g-force").checked;
   const status = document.getElementById("g-status");
   const button = document.getElementById("g-submit");
@@ -868,6 +888,8 @@ async function startGeneration(storyId) {
         identity_adapter_scale,
         use_character_lora,
         character_lora_scale,
+        use_pose_controlnet,
+        pose_controlnet_scale,
         force,
       }),
     });

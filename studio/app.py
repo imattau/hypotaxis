@@ -595,6 +595,8 @@ class GenerateRequest(BaseModel):
     identity_adapter_scale: float = Field(0.6, ge=0, le=2)
     use_character_lora: bool = False
     character_lora_scale: float = Field(0.8, ge=0, le=2)
+    use_pose_controlnet: bool = False
+    pose_controlnet_scale: float = Field(0.5, ge=0, le=2)
     force: bool = False
 
 
@@ -632,6 +634,8 @@ def generate(story_id: str, req: GenerateRequest):
         identity_adapter_scale=req.identity_adapter_scale,
         use_character_lora=req.use_character_lora,
         character_lora_scale=req.character_lora_scale,
+        use_pose_controlnet=req.use_pose_controlnet,
+        pose_controlnet_scale=req.pose_controlnet_scale,
         output_dir=str(OUTPUT_DIR),
         registry_dir=str(REGISTRY_DIR),
     )

@@ -11,8 +11,28 @@ from pathlib import Path
 from .character_lora import TRAINING_VIEW_PROMPTS, sanitize_adapter_name
 from .config import PipelineConfig, resolve_device
 from .fonts import load_font, wrap_to_width
+from .pose_skeleton import multi_person_skeleton
 from .registry import CharacterRegistry
 from .schema import Panel, Page
+
+# pose-ControlNet conditioning for multi-character panels (see
+# PipelineConfig.use_pose_controlnet, DiffusersBackend._generate_with_pose_controlnet).
+# This ControlNet checkpoint is trained against full SDXL base, not the
+# lighter sdxl-turbo checkpoint the rest of this backend defaults to -
+# loaded as a separate pipeline (_load_pose_pipe) rather than swapping
+# cfg.checkpoint's model for the whole story.
+_POSE_CONTROLNET_MODEL = "thibaud/controlnet-openpose-sdxl-1.0"
+_POSE_CONTROLNET_BASE_CHECKPOINT = "stabilityai/stable-diffusion-xl-base-1.0"
+# found via real generation comparisons, not guessed: full SDXL base's
+# normal (non-turbo) steps/guidance was needed for legible in-style output -
+# a first attempt with a lower step count and no negative prompt produced
+# dark, underexposed silhouettes instead of visible characters
+_POSE_CONTROLNET_STEPS = 30
+_POSE_CONTROLNET_GUIDANCE_SCALE = 8.5
+_POSE_CONTROLNET_NEGATIVE_PROMPT = (
+    "silhouette, dark, underexposed, shadow figures, black shapes, photorealistic, photo, "
+    "color, blurry, extra limbs, extra people, deformed, low contrast"
+)
 
 
 def _seed_for(story_id: str, page_index: int, panel_index: int = -1) -> int:
@@ -311,6 +331,9 @@ class DiffusersBackend(ImageBackend):
         # cheap) and which one, if any, is currently active
         self._loaded_lora_adapters: set[str] = set()
         self._active_lora_adapter: str | None = None
+        # separate pose-ControlNet pipe (see _load_pose_pipe) - only loaded
+        # lazily, the first time a panel actually needs it
+        self._pose_pipe = None
 
     def _load(self):
         if self._base_pipe is not None:
@@ -492,6 +515,66 @@ class DiffusersBackend(ImageBackend):
             self._base_pipe.set_adapters([adapter_name], adapter_weights=[self.cfg.character_lora_scale])
             self._active_lora_adapter = adapter_name
 
+    def _load_pose_pipe(self) -> None:
+        """Lazily loads the separate pose-ControlNet pipeline (see
+        cfg.use_pose_controlnet) - a real second SDXL pipeline in memory,
+        only paid for on the first panel that actually needs it, not for
+        every story regardless of whether any panel ever tags 2+
+        characters."""
+        if self._pose_pipe is not None:
+            return
+        import torch
+        from diffusers import ControlNetModel, StableDiffusionXLControlNetPipeline
+
+        dtype = torch.float16 if self.device.startswith("cuda") else torch.float32
+        controlnet = ControlNetModel.from_pretrained(_POSE_CONTROLNET_MODEL, torch_dtype=dtype)
+        self._pose_pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
+            _POSE_CONTROLNET_BASE_CHECKPOINT, controlnet=controlnet, torch_dtype=dtype
+        )
+        self._pose_pipe.vae.enable_slicing()
+        self._pose_pipe.vae.enable_tiling()
+        self._pose_pipe.to(self.device)
+
+    def _generate_with_pose_controlnet(self, prompt: str, count: int, width: int, height: int, generator) -> Image.Image:
+        """Real generation comparisons (not just prompt wording) found no
+        amount of "exactly two people, nobody else in frame" phrasing
+        reliably stopped SDXL from dropping or duplicating figures in a
+        multi-character panel. A synthetic OpenPose skeleton with exactly
+        `count` figures (see pose_skeleton.multi_person_skeleton), fed to
+        this ControlNet, made the headcount and rough positioning a
+        structural guarantee instead - the actual fix this whole path
+        exists for.
+
+        Doesn't assign a specific character's identity to a specific figure
+        position - each figure's look is still whatever the shared text
+        prompt implies (one real comparison run got genders swapped between
+        the two figures at a higher controlnet_conditioning_scale). That's
+        the same open problem the per-character LoRA solves for a
+        single-subject panel, not yet extended to a multi-figure one - see
+        cfg.pose_controlnet_scale's docstring in config.py for the
+        scale/identity-following tradeoff this was tuned against.
+
+        Runs against a full SDXL base checkpoint (_POSE_CONTROLNET_BASE_CHECKPOINT),
+        not cfg.checkpoint (sdxl-turbo by default) - the ControlNet checkpoint is
+        trained against that specific base and won't work with an unrelated one, and
+        that base's normal (non-turbo) steps/guidance also happens to be what real
+        testing showed was needed for legible, in-style output here, not silhouettes.
+        """
+        self._load_pose_pipe()
+        pose_image = multi_person_skeleton(width, height, count)
+        result = self._pose_pipe(
+            prompt=prompt,
+            negative_prompt=_POSE_CONTROLNET_NEGATIVE_PROMPT,
+            image=pose_image,
+            num_inference_steps=_POSE_CONTROLNET_STEPS,
+            guidance_scale=_POSE_CONTROLNET_GUIDANCE_SCALE,
+            controlnet_conditioning_scale=self.cfg.pose_controlnet_scale,
+            generator=generator,
+            width=width,
+            height=height,
+        )
+        return result.images[0]
+
     def _generate_reference(self, prompt: str, story_id: str, name: str, kind: str, registry: CharacterRegistry):
         import torch
 
@@ -630,16 +713,23 @@ class DiffusersBackend(ImageBackend):
         # compose_page's crop-to-fit handle the sub-pixel difference.
         gen_width, gen_height = _round_to_8(size[0]), _round_to_8(size[1])
 
-        result = self._base_pipe(
-            prompt=prompt,
-            num_inference_steps=self.cfg.steps,
-            guidance_scale=self.cfg.guidance_scale,
-            width=gen_width,
-            height=gen_height,
-            generator=generator,
-            **self._ip_kwargs(self._base_pipe, char_image, char_scale, loc_image, loc_scale),
-        )
-        image = result.images[0]
+        if self.cfg.use_pose_controlnet and len(panel.characters) >= 2:
+            # char_name is already None here (_resolve_target skips identity
+            # conditioning for 2+ characters) - this path replaces that gap
+            # with a structural headcount/position guarantee instead, see
+            # _generate_with_pose_controlnet
+            image = self._generate_with_pose_controlnet(prompt, len(panel.characters), gen_width, gen_height, generator)
+        else:
+            result = self._base_pipe(
+                prompt=prompt,
+                num_inference_steps=self.cfg.steps,
+                guidance_scale=self.cfg.guidance_scale,
+                width=gen_width,
+                height=gen_height,
+                generator=generator,
+                **self._ip_kwargs(self._base_pipe, char_image, char_scale, loc_image, loc_scale),
+            )
+            image = result.images[0]
         if (gen_width, gen_height) != size:
             image = image.resize(size)
         return image

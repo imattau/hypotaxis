@@ -13,10 +13,12 @@ from __future__ import annotations
 from manga_pipeline.captioner import build_captioner_source
 from manga_pipeline.story_adapt import (
     _caption_input,
+    _layout_fits,
     _merge_person_aliases,
     _normalize_quotes,
     _split_on_scene_breaks,
     _strip_markdown_structure,
+    _TEMPLATES_BY_COUNT,
     get_nlp,
     names_in_chunk,
     pack_into_pages,
@@ -246,6 +248,36 @@ def test_pack_into_pages_rejects_too_short_story():
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_pack_into_pages_avoids_narrow_layout_for_wide_shot():
+    # regression: a "wide two-shot" panel landed in H3's narrow vertical
+    # strip in a real page-generation test and rendered as a single figure
+    # instead of the two people the prompt asked for - see is_wide_box()
+    panels = [
+        Panel(scene_description="a", camera_hint="wide two-shot"),
+        Panel(scene_description="b", camera_hint="close-up"),
+        Panel(scene_description="c", camera_hint="close-up"),
+    ]
+    pages = pack_into_pages(panels)
+    assert len(pages) == 1
+    assert pages[0].layout not in ("H3", "V12")  # box 0 is narrow in both
+
+
+def test_layout_fits_false_for_every_4panel_template_when_all_wide():
+    # no 4-panel template (G22, H13, H31) has every box wide - G22 is all
+    # narrow, H13/H31 each have exactly one wide box - so a group needing
+    # four wide shots at once has no fully-compatible layout; pack_into_pages
+    # then falls back to every template of that count rather than crashing.
+    # Tested directly against _layout_fits rather than through
+    # pack_into_pages: the greedy grouper in pack_into_pages always prefers
+    # 3-panel groups over 4 whenever at least 3 panels remain (3 is checked
+    # before 4 in _SUPPORTED_COUNTS), so a real 4-panel group is never
+    # actually produced by that algorithm - a pre-existing quirk unrelated
+    # to camera-hint-aware layout selection.
+    group = [Panel(scene_description=str(i), camera_hint="wide two-shot") for i in range(4)]
+    for layout in _TEMPLATES_BY_COUNT[4]:
+        assert _layout_fits(layout, group) is False
 
 
 def test_split_dialogue_reporting_verb_in_own_sentence():

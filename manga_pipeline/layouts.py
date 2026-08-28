@@ -49,3 +49,30 @@ def panel_count(layout: str) -> int:
 
 def boxes_for(layout: str) -> list[Box]:
     return LAYOUTS[layout]
+
+
+# Stage A (pack_into_pages in story_adapt.py) picks a layout per page without
+# knowing the final render's PipelineConfig - page_width/page_height is a
+# Stage C rendering concern, and threading it through would couple two
+# currently-independent stages just to cover a case every default
+# PipelineConfig already matches. Assumed here instead: the same 1024x1536
+# portrait page every default actually renders at.
+_ASSUMED_PAGE_ASPECT = 1024 / 1536
+
+
+def is_wide_box(box: Box) -> bool:
+    """True if a panel box's own shape (accounting for the page's overall
+    portrait proportions - see _ASSUMED_PAGE_ASPECT) is at least as wide as
+    it is tall, i.e. landscape-oriented rather than portrait-oriented.
+
+    Used to keep pack_into_pages from handing a "wide two-shot"/"wide
+    establishing shot" panel a box that physically can't hold it - found via
+    a real page-generation test where exactly that happened: a wide
+    two-shot panel landed in an H3 layout's narrow vertical strip and
+    rendered as a single figure standing at a window instead of the two
+    people the prompt asked for, even though the prompt text and character
+    tags were both correct. The panel shape itself was fighting the
+    requested composition.
+    """
+    _, _, w, h = box
+    return (w * _ASSUMED_PAGE_ASPECT) / h >= 1.0

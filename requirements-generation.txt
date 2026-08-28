@@ -3,3 +3,4 @@ diffusers
 transformers
 accelerate
 peft  # needed at inference time for per-character LoRA (train_character_lora.py), not just training
+controlnet_aux  # OpenPose skeleton drawing convention for pose-ControlNet multi-character panels (opt-in, see PipelineConfig.use_pose_controlnet)

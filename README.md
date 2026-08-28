@@ -179,31 +179,92 @@ training the LoRA parameters in fp16 (matching the frozen base model) produces N
 fix (already applied) is `diffusers.training_utils.cast_training_params(unet, dtype=torch.float32)`
 right after `add_adapter()`, keeping the LoRA weights in fp32 while the frozen base stays fp16.
 
+## Pose ControlNet (experimental, opt-in)
+
+Identity conditioning (IP-Adapter, Character LoRA above) is skipped entirely for any panel
+tagged with 2+ characters - blending several identities into one panel is a separate unsolved
+problem (see `DiffusersBackend._resolve_target`). That gap turned out to have a second,
+independent symptom worth its own fix: without any identity conditioning steering it, SDXL
+would routinely drop or duplicate figures in such a panel - a "wide two-shot" tagged for two
+characters coming out as four indistinct figures, or as one. No amount of prompt engineering
+fixed this reliably (tested for real: explicit "exactly two people, nobody else in frame"
+wording made no measurable difference across repeated generations) - explicit numeric/counting
+instructions are a well-known weak point for SDXL-class models, distinct from the compositional
+framing language that *did* fix camera-hint adherence (see "Camera hint prompt expansion"
+below).
+
+`use_pose_controlnet` (off by default) fixes this with a structural guarantee instead of a
+prompt hope: `manga_pipeline/pose_skeleton.py` generates a synthetic OpenPose skeleton image -
+not ML pose estimation, since there's no source photo to estimate a pose from, but a
+deterministic, evenly-spaced standing-figure skeleton with exactly as many figures as the panel
+has tagged characters, drawn in the exact keypoint/color convention `controlnet_aux` (and the
+OpenPose-trained ControlNet checkpoint) expects. Fed as ControlNet conditioning, this reliably
+produced the right headcount and rough positioning across every real test run, where prompt
+wording alone couldn't.
+
+Real cost: the ControlNet checkpoint (`thibaud/controlnet-openpose-sdxl-1.0`) is trained
+against full SDXL base, not the lighter `sdxl-turbo` checkpoint this project defaults to
+elsewhere, so this loads a second, separate SDXL pipeline the first time a panel actually needs
+it (`DiffusersBackend._load_pose_pipe`) - real extra VRAM, and full SDXL base's normal
+(non-turbo) 30 steps/8.5 guidance run at roughly 7-8x the per-image time of the rest of the
+pipeline. Only panels with 2+ tagged characters ever take this path; everything else is
+unaffected.
+
+`pose_controlnet_scale` (default 0.5) trades headcount/position reliability against how much
+the shared text prompt gets to drive each figure's actual appearance. Two values were compared
+head-to-head on the same real scene: 0.65 locked position tightly but rendered both figures as
+visually similar girls, ignoring that the prompt named one male and one female character; 0.5
+kept the same reliable headcount/position while correctly differentiating the two by the text
+prompt. That's still a real, open limitation, not a full fix: this only constrains *how many*
+figures and roughly *where* - not *who's who*. Nothing here assigns a specific character's
+identity/LoRA to a specific skeleton position, so a multi-character panel still can't get the
+same strong per-character likeness lock a single-character panel gets from IP-Adapter/Character
+LoRA above; it can only stop the model from silently getting the headcount wrong.
+
+## Camera hint prompt expansion
+
+`panel.camera_hint` (Stage A's content-aware shot framing) reaches the real SDXL prompt via
+`_build_prompt` in `manga_pipeline/backends.py`, but real generation comparisons found the
+production `sdxl-turbo` checkpoint mostly ignored the terse 2-3 word form of four of the seven
+hints: "wide two-shot" and "wide establishing shot" both rendered as an ordinary close/medium
+two-shot, "bird's-eye view" produced no overhead angle at all, and "over-the-shoulder" rendered
+as a flat frontal two-shot. Neither more inference steps nor switching to full SDXL base at
+standard settings reliably fixed this alone (the checkpoint swap helped over-the-shoulder
+somewhat, at the same ~7-8x per-panel cost noted above, but left the other three largely
+unchanged). What did work: spelling out what the shot actually contains - room extent, camera
+position, what's blurred vs. sharp - rather than the short label alone.
+`_CAMERA_HINT_PROMPT_EXPANSIONS` in `backends.py` expands three of the four hints into this
+longer phrasing at prompt-build time only (the short form stays what `panel.camera_hint`
+actually holds, and what the trained captioner is trained to predict); this fixed
+wide-two-shot, wide-establishing-shot, and bird's-eye-view outright on the unmodified
+production checkpoint. Over-the-shoulder only partially improved (both faces turn to profile,
+but no real foreground shoulder/head occlusion), and pushing the phrasing further overcorrected
+into a single-subject blurred close-up that lost the second character and drifted off the manga
+line-art style - so it's left at the milder, imperfect phrasing rather than chasing a further
+fix.
+
+A related, separate fix: page layout selection (`pack_into_pages` in `story_adapt.py`) used to
+pick a page's panel layout by panel count alone, blind to camera framing - a real page-
+generation test found a "wide two-shot" panel landed in an `H3` layout's narrow vertical strip
+and rendered as a single figure standing at a window instead of the two people the prompt asked
+for, even with the prompt expansion above working correctly. `is_wide_box` in `layouts.py` and
+`_layout_fits`/`_WIDE_CAMERA_HINTS` in `story_adapt.py` now keep `pack_into_pages` from handing
+a wide-shot panel a layout box that's physically too narrow to hold it, falling back to the old
+any-template-of-this-count behavior only when no template of that panel count has a suitable
+box at all.
+
 ## Project status
 
 This is an active prototype, not a finished product. Known limitations are tracked
 honestly rather than papered over:
 
 - The Stage A caption LLM (3B by default) still sometimes hallucinates content not in the source text on passages with little concrete visual detail, though noticeably less than the 0.5B model it replaced. It also occasionally echoes its own prompt instructions back as if they were caption text (a known small-model failure mode) - a sanitization pass catches and strips the clearest cases (leaked instruction phrases, invented screenplay-style scene slugs) before the caption ever reaches image generation, but this is a guard against the worst outcomes, not a guarantee the model never misbehaves.
-- `panel.camera_hint` reaches the real SDXL generation prompt (`_build_prompt` in
-  `manga_pipeline/backends.py`), but the production checkpoint (`sdxl-turbo` at its low
-  steps/guidance settings) mostly ignored the terse 2-3 word form of four of the seven hints
-  in real generation comparisons: "wide two-shot" and "wide establishing shot" both rendered
-  as an ordinary close/medium two-shot, "bird's-eye view" produced no overhead angle at all,
-  and "over-the-shoulder" rendered as a flat frontal two-shot. Neither more inference steps
-  nor switching to full `stable-diffusion-xl-base-1.0` at standard settings reliably fixed
-  this on their own (the checkpoint swap helped over-the-shoulder somewhat, at ~7-8x the
-  per-panel cost, but left the other three largely unchanged). What did work: spelling out
-  what the shot actually contains - room extent, camera position, what's blurred vs. sharp -
-  rather than the short label alone. `_CAMERA_HINT_PROMPT_EXPANSIONS` in `backends.py`
-  expands three of the four hints into this longer phrasing at prompt-build time only (the
-  short form stays what `panel.camera_hint` actually holds, and what the captioner is trained
-  to predict); this fixed wide-two-shot, wide-establishing-shot, and bird's-eye-view outright
-  on the unmodified production checkpoint. Over-the-shoulder only partially improved (both
-  faces turn to profile, but no real foreground shoulder/head occlusion), and pushing the
-  phrasing further overcorrected into a single-subject blurred close-up that lost the second
-  character and drifted off the manga line-art style - so it's left at the milder, imperfect
-  phrasing rather than chasing a further fix.
+- Getting `panel.camera_hint` to actually change SDXL's output (not just reach the prompt
+  string) needed real tuning, not just wiring - see "Camera hint prompt expansion" above for
+  what was tried, what worked, and what's still imperfect (over-the-shoulder).
+- A multi-character panel (2+ tagged characters) has no per-character identity conditioning at
+  all - see "Pose ControlNet" above for the headcount/positioning fix and what it still doesn't
+  solve (which figure looks like which character).
 - Dialogue speaker attribution can't resolve pure-pronoun cases ("he called out") without
   coreference resolution, which isn't wired in (the well-known libraries for this —
   `coreferee`, `spacy-experimental`, `BookNLP` — are all currently incompatible with a
