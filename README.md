@@ -298,6 +298,16 @@ a wide-shot panel a layout box that's physically too narrow to hold it, falling 
 any-template-of-this-count behavior only when no template of that panel count has a suitable
 box at all.
 
+Another real `pack_into_pages` bug, noticed from actually reading a generated multi-page story
+rather than a single test page: it always produced 3-panel pages. `_SUPPORTED_COUNTS = [3, 4, 2,
+9]` was tried in that fixed order on every page, and since `3 <= remaining` is true on nearly
+every iteration for a story of any real length, 3 won essentially every time - `G22`/`H13`/`H31`
+(4-panel) and `G33` (9-panel) layouts were effectively unreachable outside a trailing remainder.
+`pack_into_pages` now rotates which count is tried first per page instead of always using the
+same fixed order, while staying fully deterministic (the same story always paginates the same
+way) - a 15-panel story that used to come out as five uniform 3-panel pages now varies
+(`[3, 4, 2, 3, 3]` in one real run).
+
 ## Per-panel generation vs. a shared page image
 
 Each panel is generated independently (`DiffusersBackend.generate_panel`), sized to its own

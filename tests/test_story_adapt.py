@@ -242,6 +242,27 @@ def test_pack_into_pages_assigns_supported_layout_sizes():
         assert len(page.panels) in (2, 3)
 
 
+def test_pack_into_pages_varies_page_size_instead_of_always_three():
+    # regression: pack_into_pages used to always prefer a 3-panel group
+    # whenever at least 3 panels remained (3 was checked first in
+    # _SUPPORTED_COUNTS on every iteration), making virtually every real
+    # page a 3-panel page and leaving 4-panel/9-panel layouts unreachable -
+    # a real production behavior a user noticed. Rotating which count is
+    # tried first per group fixes this while staying deterministic.
+    panels = [Panel(scene_description=str(i)) for i in range(15)]
+    pages = pack_into_pages(panels)
+    sizes = [len(p.panels) for p in pages]
+    assert sum(sizes) == 15
+    assert len(set(sizes)) > 1, f"expected varied page sizes, got {sizes}"
+
+
+def test_pack_into_pages_is_deterministic():
+    panels = [Panel(scene_description=str(i)) for i in range(15)]
+    first = [len(p.panels) for p in pack_into_pages(panels)]
+    second = [len(p.panels) for p in pack_into_pages(panels)]
+    assert first == second
+
+
 def test_pack_into_pages_rejects_too_short_story():
     try:
         pack_into_pages([Panel(scene_description="only one")])

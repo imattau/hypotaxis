@@ -24,8 +24,10 @@ _TEMPLATES_BY_COUNT: dict[int, list[str]] = {}
 for _name, _boxes in LAYOUTS.items():
     _TEMPLATES_BY_COUNT.setdefault(len(_boxes), []).append(_name)
 
-# preference order for page pacing: favor typical page sizes over cramming
-# everything into one big grid just because the count happens to divide evenly
+# base preference order for page pacing (favor typical page sizes over
+# cramming everything into one big grid just because the count happens to
+# divide evenly) - pack_into_pages rotates this per group rather than
+# always trying it in this fixed order, see the comment there
 _SUPPORTED_COUNTS = [c for c in (3, 4, 2, 9) if c in _TEMPLATES_BY_COUNT]
 _DATASET_LOCK = threading.Lock()
 
@@ -588,15 +590,28 @@ def pack_into_pages(panels: list[Panel]) -> list[Page]:
     groups: list[list[Panel]] = []
     i = 0
     n = len(panels)
+    group_index = 0
     while i < n:
         remaining = n - i
-        count = next((c for c in _SUPPORTED_COUNTS if c <= remaining), None)
+        # rotate which count gets tried first, per group, instead of always
+        # trying _SUPPORTED_COUNTS in the same fixed order - found via real
+        # generation testing that always preferring 3 first (the previous
+        # behavior) made virtually every page a 3-panel page, since
+        # "3 <= remaining" is true on nearly every iteration for any story
+        # of reasonable length, leaving 4-panel/9-panel layouts effectively
+        # unreachable. This keeps pagination fully deterministic (the same
+        # story always paginates the same way) while giving real page-size
+        # variety instead of a fixed count picked once and reused forever.
+        offset = group_index % len(_SUPPORTED_COUNTS)
+        rotated_counts = _SUPPORTED_COUNTS[offset:] + _SUPPORTED_COUNTS[:offset]
+        count = next((c for c in rotated_counts if c <= remaining), None)
         if count is None:
             groups[-1][-1] = _merge_panel(groups[-1][-1], panels[i])
             i += 1
             continue
         groups.append(panels[i : i + count])
         i += count
+        group_index += 1
 
     pages = []
     for page_index, group in enumerate(groups):
