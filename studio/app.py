@@ -37,6 +37,8 @@ from manga_pipeline.adapter_distribution import (  # noqa: E402
     verify_schnorr_signature,
     upload_bundle_to_servers,
     torrent_available,
+    TorrentSeeder,
+    verify_bundle,
     write_bundle,
 )  # noqa: E402
 from manga_pipeline.adapter_manifest import canonical_json, load_manifest  # noqa: E402
@@ -85,6 +87,7 @@ _JOB_TTL_SECONDS = 3600
 _gpu_lock = threading.Lock()
 _gpu_busy = False
 _API_TOKEN = os.environ.get("HYPOTAXIS_API_TOKEN")
+_torrent_seeder = None
 
 
 @app.middleware("http")
@@ -237,6 +240,12 @@ class BlossomHealthRequest(BaseModel):
 class DownloadTorrentRequest(BaseModel):
     magnet: str = Field(max_length=4000)
     manifest: dict
+
+
+class SeedAdapterRequest(BaseModel):
+    name: str = Field(max_length=100)
+    version: str = Field(max_length=50)
+    magnet: str | None = Field(None, max_length=4000)
 
 
 class CompositionComponentRequest(BaseModel):
@@ -414,6 +423,52 @@ def start_torrent_download(req: DownloadTorrentRequest):
     thread = threading.Thread(target=_run_torrent_download_job, args=(job_id, req.magnet, req.manifest, destination), daemon=True)
     thread.start()
     return {"job_id": job_id}
+
+
+@app.post("/api/adapters/torrent/seed")
+def seed_adapter(req: SeedAdapterRequest):
+    """Start opt-in seeding for a verified local adapter bundle."""
+
+    global _torrent_seeder
+    bundle = _adapter_bundle(req.name, req.version)
+    manifest = load_manifest(bundle / "manifest.json")
+    try:
+        verify_bundle(manifest, bundle)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+    torrent = bundle.parent / f"{bundle.name}.torrent"
+    magnet = req.magnet or manifest.get("distribution", {}).get("torrent", {}).get("magnet")
+    if not torrent.is_file() and not magnet:
+        raise HTTPException(400, "adapter has no torrent metadata or magnet")
+    if not torrent_available():
+        raise HTTPException(503, "BitTorrent support is unavailable; install libtorrent")
+    try:
+        if _torrent_seeder is None:
+            _torrent_seeder = TorrentSeeder()
+        return _torrent_seeder.start(f"{req.name}-{req.version}", bundle, torrent_path=torrent if torrent.is_file() else None, magnet=magnet)
+    except (OSError, RuntimeError, ValueError, KeyError) as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/api/adapters/torrent/seed/{name}/{version}")
+def adapter_seed_status(name: str, version: str):
+    if _torrent_seeder is None:
+        return {"seeding": False, "seed_id": f"{name}-{version}"}
+    try:
+        return _torrent_seeder.status(f"{name}-{version}")
+    except KeyError:
+        return {"seeding": False, "seed_id": f"{name}-{version}"}
+
+
+@app.post("/api/adapters/torrent/seed/{name}/{version}/stop")
+def stop_adapter_seeding(name: str, version: str):
+    if _torrent_seeder is None:
+        return {"stopped": False, "seed_id": f"{name}-{version}"}
+    try:
+        _torrent_seeder.stop(f"{name}-{version}")
+    except KeyError:
+        return {"stopped": False, "seed_id": f"{name}-{version}"}
+    return {"stopped": True, "seed_id": f"{name}-{version}"}
 
 
 @app.post("/api/adapters/composition")

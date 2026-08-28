@@ -77,6 +77,8 @@ resulting bundle before returning. The rest of Hypotaxis remains usable when
 can fall back to Blossom mirrors.
 `TorrentSeeder` is an explicit opt-in long-lived session for keeping a
 completed bundle available to peers; downloading alone does not start seeding.
+Studio exposes Start/Stop Seeding controls for verified local bundles and
+reports the active seeder's peer and upload-rate state.
 
 Studio's Adapters tab now reports local BitTorrent availability and metadata
 state, and can create a `.torrent` for a packaged bundle. The torrent is stored
@@ -111,6 +113,8 @@ Release trust helpers also support NIP-09 revocation requests and NIP-32
 report labels. Revocations require the release author's pubkey and clients can
 use `release_is_revoked` to hide matching releases; report labels preserve a
 separate moderation trail without modifying the release manifest.
+Studio discovery also supports signed 1–5 ratings using the
+`hypotaxis.adapter.rating` label namespace.
 
 To prepare a local release bundle:
 

@@ -17,6 +17,7 @@ from manga_pipeline.adapter_distribution import (
     build_composition,
     build_release_event,
     build_release_report_event,
+    build_release_rating_event,
     build_release_revocation_event,
     compatible_manifests,
     distribution_sources,
@@ -101,6 +102,17 @@ def test_release_report_uses_nip32_label_event():
     assert report["kind"] == NOSTR_LABEL_KIND
     assert report["tags"][0] == ["L", "hypotaxis.adapter.report"]
     assert report["tags"][1] == ["l", "license.mismatch", "hypotaxis.adapter.report"]
+
+
+def test_release_rating_uses_constrained_nip32_label_event():
+    release = build_release_event(_manifest(), "1" * 64, 123)
+    release["sig"] = "2" * 128
+    rating = build_release_rating_event(release, "2" * 64, 124, 4, details="useful style adapter")
+    assert rating["kind"] == NOSTR_LABEL_KIND
+    assert rating["tags"][0] == ["L", "hypotaxis.adapter.rating"]
+    assert rating["tags"][1] == ["l", "4/5", "hypotaxis.adapter.rating"]
+    with pytest.raises(ValueError, match="1 to 5"):
+        build_release_rating_event(release, "2" * 64, 124, 6)
 
 
 def test_signed_event_rejects_id_tampering():

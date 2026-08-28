@@ -267,6 +267,33 @@ def build_release_report_event(
     return event
 
 
+def build_release_rating_event(
+    release_event: dict[str, Any],
+    pubkey: str,
+    created_at: int,
+    rating: int,
+    *,
+    details: str = "",
+) -> dict[str, Any]:
+    """Build a NIP-32 label event for a 1–5 community release rating."""
+
+    validate_signed_event(release_event)
+    _hex(pubkey, 64, "pubkey")
+    if not isinstance(rating, int) or isinstance(rating, bool) or not 1 <= rating <= 5:
+        raise ValueError("rating must be an integer from 1 to 5")
+    if not isinstance(created_at, int) or created_at < 0:
+        raise ValueError("created_at must be a non-negative integer")
+    event = {
+        "pubkey": pubkey,
+        "created_at": created_at,
+        "kind": NOSTR_LABEL_KIND,
+        "tags": [["L", "hypotaxis.adapter.rating"], ["l", f"{rating}/5", "hypotaxis.adapter.rating"], ["e", release_event["id"]], ["k", str(NOSTR_RELEASE_KIND)]],
+        "content": details,
+    }
+    event["id"] = nostr_event_id(event)
+    return event
+
+
 def _load_websocket():
     try:
         import websocket

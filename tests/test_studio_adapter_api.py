@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -304,3 +305,33 @@ def test_generate_rejects_composition_outside_registry(tmp_path, monkeypatch):
             "story",
             studio_app.GenerateRequest(adapter_composition_path=str(tmp_path / "outside.json")),
         )
+
+
+def test_seed_adapter_endpoint_starts_and_reports_opt_in_seeder(tmp_path, monkeypatch):
+    monkeypatch.setattr(studio_app, "MODELS_DIR", tmp_path / "models")
+    bundle = tmp_path / "models" / "shared_adapters" / "grounding-1.0.0"
+    bundle.mkdir(parents=True)
+    (bundle / "manifest.json").write_text(
+        json.dumps({
+            "schema": "hypotaxis.adapter.v1", "name": "grounding", "version": "1.0.0",
+            "base_model": "base", "license": "MIT", "files": [{"path": "x.bin", "sha256": hashlib.sha256(b"weights").hexdigest()}],
+            "distribution": {"torrent": {"magnet": "magnet:?xt=urn:btih:abc"}},
+        }), encoding="utf-8"
+    )
+    (bundle / "x.bin").write_bytes(b"weights")
+
+    class Seeder:
+        def start(self, seed_id, bundle_dir, **kwargs):
+            return {"seed_id": seed_id, "seeding": True, "peers": 0}
+
+        def status(self, seed_id):
+            return {"seed_id": seed_id, "seeding": True}
+
+        def stop(self, seed_id):
+            return None
+
+    studio_app._torrent_seeder = Seeder()
+    monkeypatch.setattr(studio_app, "torrent_available", lambda: True)
+    result = studio_app.seed_adapter(studio_app.SeedAdapterRequest(name="grounding", version="1.0.0"))
+    assert result["seeding"] is True
+    assert studio_app.adapter_seed_status("grounding", "1.0.0")["seeding"] is True

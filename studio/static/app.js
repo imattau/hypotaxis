@@ -300,6 +300,33 @@ async function discoverAdapters(event) {
       const deletionEvents = (await nostrPool.querySync(relays, { kinds: [5], "#e": releases.map((release) => release.event_id), limit: 100 }))
         .filter((deletion) => verifyEvent(deletion));
       releases = releases.filter((release) => !deletionEvents.some((deletion) => deletion.pubkey === release.creator_pubkey && deletion.tags.some((tag) => tag[0] === "e" && tag[1] === release.event_id)));
+      if (!releases.length) {
+        status.textContent = "No active verified releases found.";
+        results.innerHTML = "<p class='empty-state'>No active Hypotaxis releases found.</p>";
+        return;
+      }
+      const ratingEvents = (await nostrPool.querySync(relays, { kinds: [1985], "#e": releases.map((release) => release.event_id), limit: 500 }))
+        .filter((rating) => verifyEvent(rating));
+      const latestRatings = new Map();
+      for (const rating of ratingEvents) {
+        const label = rating.tags.find((tag) => tag[0] === "l" && tag[2] === "hypotaxis.adapter.rating");
+        const target = rating.tags.find((tag) => tag[0] === "e")?.[1];
+        const value = Number(label?.[1]?.split("/")[0]);
+        if (!target || !Number.isInteger(value) || value < 1 || value > 5) continue;
+        const key = `${target}:${rating.pubkey}`;
+        if (!latestRatings.has(key) || latestRatings.get(key).created_at < rating.created_at) latestRatings.set(key, { target, value, created_at: rating.created_at });
+      }
+      const aggregates = new Map();
+      for (const item of latestRatings.values()) {
+        const aggregate = aggregates.get(item.target) || { total: 0, count: 0 };
+        aggregate.total += item.value;
+        aggregate.count += 1;
+        aggregates.set(item.target, aggregate);
+      }
+      releases = releases.map((release) => {
+        const aggregate = aggregates.get(release.event_id) || { total: 0, count: 0 };
+        return { ...release, rating_average: aggregate.count ? aggregate.total / aggregate.count : null, rating_count: aggregate.count };
+      });
     }
     status.textContent = `${releases.length} verified release(s) found.`;
     if (releases.length === 0) {
@@ -314,10 +341,12 @@ async function discoverAdapters(event) {
           <div class="meta">${escapeHtml(manifest.base_model)} &middot; ${manifest.files.length} file(s)</div>
           <div class="meta">Creator: ${escapeHtml(release.creator_pubkey.slice(0, 16))}...</div>
           <div class="meta">Trust: Nostr signature verified</div>
+          <div class="meta">Community rating: ${release.rating_average === null ? "none yet" : `${release.rating_average.toFixed(1)}/5 (${release.rating_count})`}</div>
           <div class="meta">Event: ${escapeHtml(release.event_id.slice(0, 16))}...</div>
           ${Array.isArray(manifest.distribution?.blossom) && manifest.distribution.blossom.length ? `<button class="btn secondary install-adapter" type="button">Install from Blossom</button>` : ""}
           ${manifest.distribution?.torrent?.magnet ? `<button class="btn secondary torrent-download" type="button">Download via BitTorrent</button>` : ""}
           <button class="btn secondary report-release" type="button">Report</button>
+          <button class="btn secondary rate-release" type="button">Rate</button>
           <div class="status-line install-status"></div>
         </div>
       `);
@@ -326,6 +355,7 @@ async function discoverAdapters(event) {
       const torrentButton = card.querySelector(".torrent-download");
       if (torrentButton) torrentButton.addEventListener("click", () => downloadAdapterTorrent(release, torrentButton));
       card.querySelector(".report-release").addEventListener("click", () => reportRelease(release, card.querySelector(".report-release")));
+      card.querySelector(".rate-release").addEventListener("click", () => rateRelease(release, card.querySelector(".rate-release")));
       results.appendChild(card);
     }
   } catch (e) {
@@ -357,6 +387,32 @@ async function reportRelease(release, button) {
     button.textContent = "Reported";
   } catch (e) {
     button.textContent = "Report failed";
+    button.disabled = false;
+  }
+}
+
+async function rateRelease(release, button) {
+  const rawRating = prompt("Rating from 1 to 5", "5");
+  const rating = Number(rawRating);
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) return;
+  if (!window.nostr || typeof window.nostr.signEvent !== "function") {
+    alert("A NIP-07 browser signer is required to submit ratings.");
+    return;
+  }
+  const details = prompt("Optional rating details", "") || "";
+  button.disabled = true;
+  try {
+    const signed = await window.nostr.signEvent({
+      kind: 1985,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [["L", "hypotaxis.adapter.rating"], ["l", `${rating}/5`, "hypotaxis.adapter.rating"], ["e", release.event_id], ["k", "30078"]],
+      content: details,
+    });
+    if (!verifyEvent(signed)) throw new Error("signer returned an invalid event");
+    await Promise.any(nostrPool.publish(document.getElementById("adapter-relays").value.split("\n").map((line) => line.trim()).filter(Boolean), signed));
+    button.textContent = `Rated ${rating}/5`;
+  } catch (e) {
+    button.textContent = "Rating failed";
     button.disabled = false;
   }
 }
@@ -438,10 +494,12 @@ async function loadLocalAdapters(holder) {
         <div class="meta">${escapeHtml(adapter.bundle_dir)}</div>
         <div class="meta torrent-state">BitTorrent: ${adapter.torrent_exists ? `ready (${escapeHtml(adapter.torrent_path)})` : adapter.torrent_available ? "not created" : "libtorrent unavailable"}</div>
         ${adapter.torrent_available && !adapter.torrent_exists ? `<button class="btn secondary create-torrent" type="button">Create Torrent</button>` : ""}
+        ${adapter.torrent_exists ? `<button class="btn secondary seed-torrent" type="button">Start Seeding</button>` : ""}
         <button class="btn secondary upload-blossom" type="button">Upload to Blossom</button>
         <button class="btn secondary publish-adapter" type="button">Publish to Nostr</button>
         <button class="btn secondary remove-adapter" type="button">Remove</button>
         <div class="status-line torrent-status"></div>
+        <div class="status-line seed-status"></div>
         <div class="status-line blossom-status"></div>
         <div class="status-line publish-status"></div>
       </div>
@@ -450,6 +508,8 @@ async function loadLocalAdapters(holder) {
       if (torrentButton) {
         torrentButton.addEventListener("click", () => createTorrent(adapter, torrentButton));
       }
+      const seedButton = grid.lastElementChild.querySelector(".seed-torrent");
+      if (seedButton) seedButton.addEventListener("click", () => toggleSeeding(adapter, seedButton));
       const publishButton = grid.lastElementChild.querySelector(".publish-adapter");
       publishButton.addEventListener("click", () => publishAdapter(adapter, publishButton));
       const blossomButton = grid.lastElementChild.querySelector(".upload-blossom");
@@ -585,6 +645,33 @@ async function createTorrent(adapter, button) {
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
+    button.disabled = false;
+  }
+}
+
+async function toggleSeeding(adapter, button) {
+  const card = button.closest(".card");
+  const status = card.querySelector(".seed-status");
+  button.disabled = true;
+  try {
+    const current = await api(`/api/adapters/torrent/seed/${encodeURIComponent(adapter.name)}/${encodeURIComponent(adapter.version)}`);
+    if (current.seeding) {
+      await api(`/api/adapters/torrent/seed/${encodeURIComponent(adapter.name)}/${encodeURIComponent(adapter.version)}/stop`, { method: "POST" });
+      button.textContent = "Start Seeding";
+      status.textContent = "Seeding stopped.";
+      return;
+    }
+    const result = await api("/api/adapters/torrent/seed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: adapter.name, version: adapter.version }),
+    });
+    button.textContent = "Stop Seeding";
+    status.textContent = `Seeding with ${result.peers || 0} peer(s). Upload: ${Math.round((result.upload_rate || 0) / 1024)} KiB/s`;
+  } catch (e) {
+    status.textContent = "Error: " + e.message;
+    status.classList.add("error");
+  } finally {
     button.disabled = false;
   }
 }
