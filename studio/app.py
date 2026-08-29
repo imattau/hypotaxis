@@ -97,7 +97,8 @@ DATASET_PATH = DATA_ROOT / "data" / "caption_pairs.jsonl"
 CAPTIONER_ADAPTER_DIR = ROOT / "models" / "captioner" / "adapter"
 CAPTIONER_BASE_MODEL = "google-t5/t5-base"
 MODELS_DIR = DATA_ROOT / "models"
-HF_CACHE_DIR = MODELS_DIR / "huggingface"
+HF_HOME_DIR = MODELS_DIR / "huggingface"
+HF_CACHE_DIR = HF_HOME_DIR / "hub"
 SEED_STATE_PATH = MODELS_DIR / "shared_adapters" / ".seeding.json"
 REQUIRE_NOSTR_SIGNATURES = os.getenv("HYPOTAXIS_REQUIRE_NOSTR_SIGNATURES", "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -143,7 +144,8 @@ def _ensure_desktop_seed_data() -> None:
 
 
 _ensure_desktop_seed_data()
-os.environ.setdefault("HF_HOME", str(HF_CACHE_DIR))
+os.environ.setdefault("HF_HOME", str(HF_HOME_DIR))
+os.environ.setdefault("HF_HUB_CACHE", str(HF_CACHE_DIR))
 
 
 def _require_signature_backend() -> None:
@@ -280,7 +282,7 @@ def _model_is_downloaded(repo_id: str) -> bool:
         "config.json",
     )
     cache_dirs = [HF_CACHE_DIR]
-    standard_cache = Path.home() / ".cache" / "huggingface"
+    standard_cache = Path.home() / ".cache" / "huggingface" / "hub"
     if standard_cache != HF_CACHE_DIR:
         cache_dirs.append(standard_cache)
     try:
