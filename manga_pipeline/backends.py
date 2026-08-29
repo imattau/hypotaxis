@@ -20,11 +20,24 @@ from .schema import Panel, Page
 
 # pose-ControlNet conditioning for multi-character panels (see
 # PipelineConfig.use_pose_controlnet, DiffusersBackend._generate_with_pose_controlnet).
-# This ControlNet checkpoint is trained against full SDXL base, not the
-# lighter sdxl-turbo checkpoint the rest of this backend defaults to -
-# loaded as a separate pipeline (_load_pose_pipe) rather than swapping
-# cfg.checkpoint's model for the whole story.
-_POSE_CONTROLNET_MODEL = "thibaud/controlnet-openpose-sdxl-1.0"
+# This ControlNet checkpoint is trained against full SDXL base - loaded as a
+# separate pipeline (_load_pose_pipe) rather than swapping cfg.checkpoint's
+# model for the whole story, so it works regardless of which checkpoint
+# cfg.checkpoint itself points at.
+#
+# xinsir's repo, not thibaud/controlnet-openpose-sdxl-1.0: thibaud's repo
+# only publishes diffusion_pytorch_model.bin (a pickle, not safetensors) as
+# the ControlNetModel-loadable weights - from_pretrained's default handling
+# silently falls back to loading that pickle when it can't find a
+# safetensors file. A pickle from an arbitrary Hub repo executes on load, so
+# a silent fallback there is a real supply-chain risk (see this project's
+# other loading-hardening work, e.g. composition loading). xinsir's repo
+# publishes a standard ControlNetModel diffusion_pytorch_model.safetensors
+# with a matching config (same architecture, "rgb" conditioning channel
+# order) - use_safetensors=True below on both loads makes that a hard
+# requirement rather than a preference, so this fails loudly instead of
+# quietly falling back to pickle again if that ever changes upstream.
+_POSE_CONTROLNET_MODEL = "xinsir/controlnet-openpose-sdxl-1.0"
 _POSE_CONTROLNET_BASE_CHECKPOINT = "stabilityai/stable-diffusion-xl-base-1.0"
 # found via real generation comparisons, not guessed: full SDXL base's
 # normal (non-turbo) steps/guidance was needed for legible in-style output -
@@ -36,6 +49,14 @@ _POSE_CONTROLNET_NEGATIVE_PROMPT = (
     "silhouette, dark, underexposed, shadow figures, black shapes, photorealistic, photo, "
     "color, blurry, extra limbs, extra people, deformed, low contrast"
 )
+# multi_person_skeleton() lays out full-body figures spaced across the
+# frame - appropriate for a shot that actually shows full/half bodies, but a
+# real generation comparison on a tagged close-up panel showed it forcing a
+# distant, awkwardly-empty full-body composition that ignored the panel's
+# own "close-up" framing entirely. Camera hints this tight in on faces skip
+# pose-ControlNet and fall back to the normal (no structural headcount
+# guarantee) path instead - see generate_panel.
+_POSE_CONTROLNET_INCOMPATIBLE_CAMERA_HINTS = {"close-up", "extreme close-up"}
 
 
 def _seed_for(story_id: str, page_index: int, panel_index: int = -1) -> int:
@@ -566,9 +587,18 @@ class DiffusersBackend(ImageBackend):
         generating), and a real run hit CUDA OOM at VAE decode with both
         fully resident on a 16GB card - unsurprising in hindsight, since
         cfg.use_identity_adapter (on by default) already puts _base_pipe
-        itself on cpu-offload for the same reason (see _load). Slower per
-        pose-conditioned panel, but that path is already ~7-8x the normal
-        per-panel cost regardless, so this isn't the dominant cost.
+        itself on cpu-offload for the same reason (see _load). This path's
+        per-panel step cost is now on par with a normal panel (cfg.checkpoint
+        defaults to the same 30-step/guidance_scale=7.0 base SDXL settings
+        _POSE_CONTROLNET_STEPS/_POSE_CONTROLNET_GUIDANCE_SCALE were tuned
+        against - it used to be ~7-8x normal cost back when the default
+        checkpoint was the 4-step sdxl-turbo); what's added here is a second
+        full pipeline's worth of load time and resident weights, paid once
+        per story on the first panel that needs it.
+
+        use_safetensors=True on both loads: fail loudly if either repo ever
+        stops publishing safetensors weights, rather than silently falling
+        back to a pickle checkpoint (see _POSE_CONTROLNET_MODEL's comment).
         """
         if self._pose_pipe is not None:
             return
@@ -576,9 +606,9 @@ class DiffusersBackend(ImageBackend):
         from diffusers import ControlNetModel, StableDiffusionXLControlNetPipeline
 
         dtype = torch.float16 if self.device.startswith("cuda") else torch.float32
-        controlnet = ControlNetModel.from_pretrained(_POSE_CONTROLNET_MODEL, torch_dtype=dtype)
+        controlnet = ControlNetModel.from_pretrained(_POSE_CONTROLNET_MODEL, torch_dtype=dtype, use_safetensors=True)
         self._pose_pipe = StableDiffusionXLControlNetPipeline.from_pretrained(
-            _POSE_CONTROLNET_BASE_CHECKPOINT, controlnet=controlnet, torch_dtype=dtype
+            _POSE_CONTROLNET_BASE_CHECKPOINT, controlnet=controlnet, torch_dtype=dtype, use_safetensors=True
         )
         self._pose_pipe.vae.enable_slicing()
         self._pose_pipe.vae.enable_tiling()
@@ -766,7 +796,11 @@ class DiffusersBackend(ImageBackend):
         # compose_page's crop-to-fit handle the sub-pixel difference.
         gen_width, gen_height = _round_to_8(size[0]), _round_to_8(size[1])
 
-        if self.cfg.use_pose_controlnet and len(panel.characters) >= 2:
+        if (
+            self.cfg.use_pose_controlnet
+            and len(panel.characters) >= 2
+            and panel.camera_hint not in _POSE_CONTROLNET_INCOMPATIBLE_CAMERA_HINTS
+        ):
             # char_name is already None here (_resolve_target skips identity
             # conditioning for 2+ characters) - this path replaces that gap
             # with a structural headcount/position guarantee instead, see
