@@ -1123,6 +1123,7 @@ def adapt(req: AdaptRequest):
         raise HTTPException(409, "another job (adapt or generate) is already running - only one at a time on this GPU")
 
     job_id = _create_job()
+    _jobs[job_id].update({"kind": "adapt", "story_id": story_id})
     thread = threading.Thread(target=_run_adapt_job, args=(job_id, req, story_id), daemon=True)
     thread.start()
     return {"job_id": job_id}
@@ -1381,6 +1382,7 @@ def prepare_cast(story_id: str, req: PrepareCastRequest):
     )
 
     job_id = _create_job()
+    _jobs[job_id].update({"kind": "cast", "story_id": story_id})
     thread = threading.Thread(target=_run_prepare_cast_job, args=(job_id, story, cfg, req.force), daemon=True)
     thread.start()
     return {"job_id": job_id}
@@ -1549,6 +1551,7 @@ def generate(story_id: str, req: GenerateRequest):
     )
 
     job_id = _create_job()
+    _jobs[job_id].update({"kind": "generate", "story_id": story_id})
     thread = threading.Thread(target=_run_generation_job, args=(job_id, story, cfg, req.force), daemon=True)
     thread.start()
     return {"job_id": job_id}

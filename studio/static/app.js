@@ -1330,6 +1330,7 @@ function showNewStory() {
     }
   });
   document.getElementById("f-submit").addEventListener("click", submitNewStory);
+  restoreActiveAdaptJob();
 }
 
 function wireFileUpload(fileInputId, statusId, targetTextareaId) {
@@ -1388,6 +1389,7 @@ async function submitNewStory() {
   }
 
   button.disabled = true;
+  setGpuJobBusy(true, button);
   status.classList.remove("error");
   status.textContent = "Starting...";
 
@@ -1410,6 +1412,7 @@ async function submitNewStory() {
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
+    setGpuJobBusy(false);
     button.disabled = false;
   }
 }
@@ -1419,12 +1422,14 @@ async function pollAdaptJob(jobId, storyId, status, button) {
     const job = await api(`/api/jobs/${jobId}`);
     status.textContent = job.message;
     if (job.status === "done") {
+      setGpuJobBusy(false);
       button.disabled = false;
       showStoryDetail(storyId);
       return;
     }
     if (job.status === "error") {
       status.classList.add("error");
+      setGpuJobBusy(false);
       button.disabled = false;
       return;
     }
@@ -1432,8 +1437,21 @@ async function pollAdaptJob(jobId, storyId, status, button) {
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
+    setGpuJobBusy(false);
     button.disabled = false;
   }
+}
+
+async function restoreActiveAdaptJob() {
+  const { jobs } = await api("/api/jobs/active");
+  const job = jobs.find((candidate) => candidate.kind === "adapt");
+  if (!job) return;
+  const status = document.getElementById("f-status");
+  const button = document.getElementById("f-submit");
+  if (!status || !button) return;
+  setGpuJobBusy(true, button);
+  status.textContent = job.message || "Adaptation in progress...";
+  pollAdaptJob(job.job_id, job.story_id, status, button);
 }
 
 // ---------- Story Detail ----------
@@ -1494,6 +1512,30 @@ async function showStoryDetail(id) {
   main.appendChild(pagesHeader);
   main.appendChild(galleryHolder);
   renderGallery(galleryHolder, pagesResp);
+  await restoreActiveGpuJobs(id);
+}
+
+async function restoreActiveGpuJobs(storyId) {
+  await restoreActiveLoraJob(storyId);
+  const { jobs } = await api("/api/jobs/active");
+  const job = jobs.find((candidate) => candidate.story_id === storyId && ["cast", "generate"].includes(candidate.kind));
+  if (!job) return;
+  setGpuJobBusy(true);
+  if (job.kind === "cast") {
+    const status = document.getElementById("c-status");
+    const button = document.getElementById("c-submit");
+    if (status && button) {
+      status.textContent = job.message || "Cast generation in progress...";
+      pollCastJob(job.job_id, storyId, status, button);
+    }
+  } else {
+    const status = document.getElementById("g-status");
+    const button = document.getElementById("g-submit");
+    if (status && button) {
+      status.textContent = job.message || "Page generation in progress...";
+      pollJob(job.job_id, storyId, status, button);
+    }
+  }
 }
 
 function renderScript(story) {
@@ -1738,6 +1780,7 @@ async function startCharacterLoraTraining(storyId, name, button, status) {
 
 function setLoraTrainingBusy(active, activeButton = null) {
   loraTrainingActive = active;
+  setGpuJobBusy(active, activeButton);
   document.querySelectorAll(".lora-train-btn").forEach((button) => {
     button.disabled = active;
     if (active && button !== activeButton) {
@@ -1768,6 +1811,15 @@ async function pollLoraJob(jobId, storyId, button, status) {
     status.classList.add("error");
     setLoraTrainingBusy(false);
   }
+}
+
+function setGpuJobBusy(active, activeButton = null) {
+  document.querySelectorAll("#f-submit, #c-submit, #g-submit, .lora-train-btn").forEach((button) => {
+    button.disabled = active;
+    if (active && button !== activeButton && button.classList.contains("lora-train-btn")) {
+      button.textContent = "Another GPU job is running...";
+    }
+  });
 }
 
 async function refreshIdentityGrids(storyId) {
@@ -1849,6 +1901,7 @@ async function startCastGeneration(storyId) {
   const button = document.getElementById("c-submit");
 
   button.disabled = true;
+  setGpuJobBusy(true, button);
   status.classList.remove("error");
   status.textContent = "Starting...";
 
@@ -1862,6 +1915,7 @@ async function startCastGeneration(storyId) {
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
+    setGpuJobBusy(false);
     button.disabled = false;
   }
 }
@@ -1871,12 +1925,14 @@ async function pollCastJob(jobId, storyId, status, button) {
     const job = await api(`/api/jobs/${jobId}`);
     status.textContent = job.message;
     if (job.status === "done") {
+      setGpuJobBusy(false);
       button.disabled = false;
       await refreshIdentityGrids(storyId);
       return;
     }
     if (job.status === "error") {
       status.classList.add("error");
+      setGpuJobBusy(false);
       button.disabled = false;
       return;
     }
@@ -1884,6 +1940,7 @@ async function pollCastJob(jobId, storyId, status, button) {
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
+    setGpuJobBusy(false);
     button.disabled = false;
   }
 }
@@ -2018,6 +2075,7 @@ async function startGeneration(storyId) {
   const button = document.getElementById("g-submit");
 
   button.disabled = true;
+  setGpuJobBusy(true, button);
   status.classList.remove("error");
   status.textContent = "Starting...";
 
@@ -2045,6 +2103,7 @@ async function startGeneration(storyId) {
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
+    setGpuJobBusy(false);
     button.disabled = false;
   }
 }
@@ -2054,6 +2113,7 @@ async function pollJob(jobId, storyId, status, button) {
     const job = await api(`/api/jobs/${jobId}`);
     status.textContent = job.message;
     if (job.status === "done") {
+      setGpuJobBusy(false);
       button.disabled = false;
       const galleryHolder = document.getElementById("gallery-holder");
       const pagesResp = await api(`/api/stories/${storyId}/pages`);
@@ -2063,6 +2123,7 @@ async function pollJob(jobId, storyId, status, button) {
     }
     if (job.status === "error") {
       status.classList.add("error");
+      setGpuJobBusy(false);
       button.disabled = false;
       return;
     }
@@ -2070,6 +2131,7 @@ async function pollJob(jobId, storyId, status, button) {
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
+    setGpuJobBusy(false);
     button.disabled = false;
   }
 }
