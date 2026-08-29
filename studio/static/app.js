@@ -1674,7 +1674,7 @@ function renderCharacters(characters, emptyMessage, storyId, kind) {
       ? `<img src="${c.reference_image_url}" alt="${escapeHtml(name)}" />`
       : `<div class="placeholder">Not designed yet</div>`;
     const loraBadge = c.has_lora ? `<div class="meta">LoRA trained</div>` : "";
-    const loraButton = kind === "registry" ? `<button class="btn secondary lora-train-btn" ${loraTrainingActive ? "disabled" : ""}>${loraTrainingActive ? "Training another character..." : "Train LoRA"}</button>` : "";
+    const loraButton = kind === "registry" ? `<button class="btn secondary lora-train-btn" data-character="${escapeHtml(name)}" ${loraTrainingActive ? "disabled" : ""}>${loraTrainingActive ? "Training another character..." : "Train LoRA"}</button>` : "";
     const card = el(`
       <div class="card char-card">
         <button class="card-delete" title="Delete ${escapeHtml(name)}">&times;</button>
@@ -1782,6 +1782,20 @@ async function refreshIdentityGrids(storyId) {
     );
   if (grids[2])
     grids[2].replaceWith(renderCharacters(propsResp.props, "No prop profiles for this story.", storyId, "props"));
+  await restoreActiveLoraJob(storyId);
+}
+
+async function restoreActiveLoraJob(storyId) {
+  const { jobs } = await api("/api/jobs/active");
+  const job = jobs.find((candidate) => candidate.kind === "lora" && candidate.story_id === storyId);
+  if (!job) return;
+  const button = Array.from(document.querySelectorAll(".lora-train-btn")).find(
+    (candidate) => candidate.dataset.character === job.character
+  );
+  const status = button?.closest(".char-card")?.querySelector(".lora-status");
+  setLoraTrainingBusy(true, button);
+  if (status) status.textContent = job.message || "Training in progress...";
+  if (status) pollLoraJob(job.job_id, storyId, button, status);
 }
 
 function renderCastPanel(storyId) {

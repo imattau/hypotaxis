@@ -1472,6 +1472,7 @@ def train_lora(story_id: str, name: str, req: TrainCharacterLoraRequest):
         raise HTTPException(409, "another job (adapt, cast, or generate) is already running - only one at a time on this GPU")
 
     job_id = _create_job()
+    _jobs[job_id].update({"kind": "lora", "story_id": story_id, "character": name})
     thread = threading.Thread(target=_run_train_lora_job, args=(job_id, story_id, name, story, req), daemon=True)
     thread.start()
     return {"job_id": job_id}
@@ -1551,6 +1552,23 @@ def generate(story_id: str, req: GenerateRequest):
     thread = threading.Thread(target=_run_generation_job, args=(job_id, story, cfg, req.force), daemon=True)
     thread.start()
     return {"job_id": job_id}
+
+
+@app.get("/api/jobs/active")
+def active_jobs():
+    """Return enough active-job metadata for a refreshed UI to reconnect."""
+
+    _cleanup_jobs()
+    with _jobs_lock:
+        return {
+            "jobs": [
+                {"job_id": job_id, **{key: value for key, value in job.items() if key in {
+                    "status", "message", "kind", "story_id", "character", "model_key"
+                }}}
+                for job_id, job in _jobs.items()
+                if job.get("status") in {"queued", "running"}
+            ]
+        }
 
 
 @app.get("/api/jobs/{job_id}")
