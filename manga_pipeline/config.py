@@ -114,3 +114,14 @@ class PipelineConfig:
     # the model defaulting both figures to the same appearance.
     use_pose_controlnet: bool = True
     pose_controlnet_scale: float = 0.5
+    # post-generation quality review (see DiffusersBackend._count_character_faces,
+    # backends.py's _QUALITY_REVIEW_* constants) - off by default, unlike
+    # pose_controlnet/character_lora above: this loads a third model
+    # (Qwen2.5-VL-3B, ~11GB VRAM resident in isolated testing) on top of the
+    # main SDXL pipe and whatever pose-ControlNet already added, a real
+    # resource cost on top of an already resource-heavy pipeline, worth
+    # opting into deliberately rather than defaulting on. Only checks panels
+    # that resolved to exactly one real character with a reference image -
+    # see generate_panel for why other panel shapes aren't eligible.
+    use_quality_review: bool = False
+    quality_review_max_retries: int = 2

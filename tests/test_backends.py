@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import pytest
+from PIL import Image
 
 from manga_pipeline.backends import (
     DiffusersBackend,
@@ -389,3 +390,77 @@ def test_generate_with_pose_controlnet_passes_configured_scale():
     assert call["width"] == 512
     assert call["height"] == 256
     assert call["image"].size == (512, 256)
+
+
+# ---------- _seed_for retry namespace ----------
+
+
+def test_seed_for_attempt_zero_matches_no_attempt_argument():
+    assert _seed_for("story", 2, 1) == _seed_for("story", 2, 1, attempt=0)
+
+
+def test_seed_for_attempt_changes_seed_deterministically():
+    retry_seed = _seed_for("story", 2, 1, attempt=1)
+    assert retry_seed != _seed_for("story", 2, 1)
+    assert retry_seed == _seed_for("story", 2, 1, attempt=1)  # reproducible
+    assert retry_seed != _seed_for("story", 2, 1, attempt=2)  # distinct per attempt
+
+
+# ---------- DiffusersBackend._count_character_faces ----------
+
+
+class _FakeQualityReviewerProcessor:
+    def __init__(self, response: str):
+        self._response = response
+        self.calls: list[dict] = []
+
+    def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+        return "prompt-text"
+
+    def __call__(self, text, images, return_tensors):
+        import torch
+
+        class _Inputs(dict):
+            def to(self, device):
+                return self
+
+        return _Inputs(input_ids=torch.zeros((1, 2), dtype=torch.long))
+
+    def batch_decode(self, output, skip_special_tokens):
+        return [self._response]
+
+
+class _FakeQualityReviewerModel:
+    def __init__(self):
+        self.device = "cpu"
+
+    def to(self, device):
+        return self
+
+    def generate(self, **kwargs):
+        import torch
+
+        return torch.zeros((1, 5), dtype=torch.long)
+
+
+def _backend_with_fake_reviewer(response: str) -> DiffusersBackend:
+    backend = DiffusersBackend(PipelineConfig(use_quality_review=True))
+    backend._quality_reviewer = _FakeQualityReviewerModel()
+    backend._quality_reviewer_processor = _FakeQualityReviewerProcessor(response)
+    return backend
+
+
+def test_count_character_faces_parses_leading_number():
+    backend = _backend_with_fake_reviewer("3\nTwo extra faces are visible alongside the main one.")
+    reference = Image.new("RGB", (64, 64))
+    panel = Image.new("RGB", (64, 64))
+    assert backend._count_character_faces(panel, reference) == 3
+
+
+def test_count_character_faces_defaults_to_one_when_unparseable():
+    # a response with no leading digit shouldn't crash generation - treated
+    # as "no review-triggering issue found" rather than raising
+    backend = _backend_with_fake_reviewer("I cannot tell from this image.")
+    reference = Image.new("RGB", (64, 64))
+    panel = Image.new("RGB", (64, 64))
+    assert backend._count_character_faces(panel, reference) == 1

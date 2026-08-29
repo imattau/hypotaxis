@@ -58,9 +58,41 @@ _POSE_CONTROLNET_NEGATIVE_PROMPT = (
 # guarantee) path instead - see generate_panel.
 _POSE_CONTROLNET_INCOMPATIBLE_CAMERA_HINTS = {"close-up", "extreme close-up"}
 
+# post-generation quality review (see PipelineConfig.use_quality_review,
+# DiffusersBackend._count_character_faces) - a real generation comparison
+# found this checkpoint occasionally renders a spurious duplicate/extra face
+# in a panel that should show exactly one character (reproduced identically
+# across seed/step-count changes for one specific panel, so it's a real,
+# if infrequent, checkpoint quirk, not one-off noise). Two prompting
+# strategies were tried against this exact defect: asking the model
+# abstractly "does this panel have an art defect" (false negative - missed
+# an unambiguous duplicate face) and grounding the same model in a reference
+# portrait plus a concrete counting task ("how many faces of this character
+# appear here") - the counting framing correctly distinguished the
+# defective panel from a clean control, so that's what this uses.
+# Qwen2.5-VL-3B (not a larger variant): ~11GB VRAM resident for the 3B model
+# alone in isolated testing - already substantial for a 16GB card sharing
+# space with the main SDXL pipe, so a bigger variant wasn't tested.
+_QUALITY_REVIEW_MODEL = "Qwen/Qwen2.5-VL-3B-Instruct"
+_QUALITY_REVIEW_MAX_NEW_TOKENS = 40
+_QUALITY_REVIEW_PROMPT = (
+    "The first image is a reference portrait of one character. The second image is a comic "
+    "panel that should show only this one character. Count how many faces or heads of this "
+    "character (or any character) appear in the second image. Answer with a number on the "
+    "first line, then a one-sentence explanation."
+)
+# reinforces the review's own defect category on a retry, on top of the
+# reseed - see generate_panel
+_QUALITY_REVIEW_RETRY_NEGATIVE_PROMPT = "duplicate face, extra face, two heads, extra person, cloned character"
 
-def _seed_for(story_id: str, page_index: int, panel_index: int = -1) -> int:
+
+def _seed_for(story_id: str, page_index: int, panel_index: int = -1, attempt: int = 0) -> int:
     key = f"{story_id}:{page_index}:{panel_index}"
+    if attempt:
+        # a distinct-but-still-deterministic seed for a quality-review retry
+        # (see generate_panel) - attempt=0 (the default) reproduces the exact
+        # same key/seed as before this parameter existed
+        key = f"{key}:retry{attempt}"
     return int(hashlib.sha256(key.encode()).hexdigest()[:8], 16)
 
 
@@ -385,6 +417,11 @@ class DiffusersBackend(ImageBackend):
         # separate pose-ControlNet pipe (see _load_pose_pipe) - only loaded
         # lazily, the first time a panel actually needs it
         self._pose_pipe = None
+        # quality-review model (see _load_quality_reviewer) - same lazy
+        # loading pattern, only paid for if cfg.use_quality_review is on and
+        # a panel actually needs a review
+        self._quality_reviewer = None
+        self._quality_reviewer_processor = None
 
     def _load(self):
         if self._base_pipe is not None:
@@ -682,6 +719,83 @@ class DiffusersBackend(ImageBackend):
         )
         return result.images[0]
 
+    def _load_quality_reviewer(self) -> None:
+        """Lazily loads the quality-review VLM (see cfg.use_quality_review) -
+        same reasoning as _load_pose_pipe: only paid for the first time a
+        panel actually needs a review, not for every story regardless of
+        whether cfg.use_quality_review is ever exercised.
+
+        Loaded onto CPU, not self.device: a real end-to-end test OOM'd on a
+        16GB card with both this (~11GB resident) and the main SDXL pipe on
+        GPU at once - specifically on a quality-review retry's regeneration
+        call, which runs *after* this model has already been loaded for the
+        check that triggered the retry. _count_character_faces moves this
+        model to GPU only for the duration of one review call and back to
+        CPU immediately after, so the two models are never GPU-resident at
+        the same time; kept as a live object rather than reloaded from disk
+        each time, since moving device is far cheaper than that."""
+        if self._quality_reviewer is not None:
+            return
+        import torch
+        from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+
+        dtype = torch.float16 if self.device.startswith("cuda") else torch.float32
+        self._quality_reviewer = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            _QUALITY_REVIEW_MODEL, torch_dtype=dtype, device_map="cpu"
+        )
+        self._quality_reviewer_processor = AutoProcessor.from_pretrained(_QUALITY_REVIEW_MODEL)
+
+    def _count_character_faces(self, panel_image: Image.Image, reference_image: Image.Image) -> int:
+        """Asks the quality-review VLM how many faces/heads of the given
+        character appear in panel_image, grounded against reference_image (a
+        portrait of that one character).
+
+        Framed as counting-against-a-reference, not "does this image have a
+        defect": a real comparison on an image with a confirmed, visually
+        obvious duplicate face found the abstract defect-detection framing
+        produced a false negative, while this grounded counting framing
+        correctly distinguished the same defective panel (count > 1) from a
+        clean control (count == 1) - see backends.py commit history/tests
+        for both prompts. Returns 1 (i.e. "no review-triggering issue found")
+        if the model's response can't be parsed as a leading integer, rather
+        than raising - a parse failure here shouldn't crash generation.
+
+        Moves the reviewer to GPU only for this call, back to CPU (plus
+        emptying the CUDA cache) before returning even on failure - see
+        _load_quality_reviewer for why."""
+        import torch
+
+        self._load_quality_reviewer()
+        if self.device.startswith("cuda"):
+            self._quality_reviewer.to(self.device)
+        try:
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "image": reference_image},
+                        {"type": "image", "image": panel_image},
+                        {"type": "text", "text": _QUALITY_REVIEW_PROMPT},
+                    ],
+                }
+            ]
+            text = self._quality_reviewer_processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            inputs = self._quality_reviewer_processor(
+                text=[text], images=[reference_image, panel_image], return_tensors="pt"
+            ).to(self._quality_reviewer.device)
+            output = self._quality_reviewer.generate(**inputs, max_new_tokens=_QUALITY_REVIEW_MAX_NEW_TOKENS)
+            response = self._quality_reviewer_processor.batch_decode(
+                output[:, inputs["input_ids"].shape[1] :], skip_special_tokens=True
+            )[0]
+        finally:
+            if self.device.startswith("cuda"):
+                self._quality_reviewer.to("cpu")
+                torch.cuda.empty_cache()
+        match = re.search(r"\d+", response)
+        return int(match.group()) if match else 1
+
     def _generate_reference(self, prompt: str, story_id: str, name: str, kind: str, registry: CharacterRegistry):
         import torch
 
@@ -837,31 +951,57 @@ class DiffusersBackend(ImageBackend):
         # compose_page's crop-to-fit handle the sub-pixel difference.
         gen_width, gen_height = _round_to_8(size[0]), _round_to_8(size[1])
 
-        if (
+        use_pose_controlnet_path = (
             self.cfg.use_pose_controlnet
             and len(human_characters) >= 2
             and panel.camera_hint not in _POSE_CONTROLNET_INCOMPATIBLE_CAMERA_HINTS
-        ):
-            # counts human_characters, not panel.characters - a panel
-            # tagging one real character plus one or more abstract/no-form
-            # ones (see _split_by_abstractness) has only one real body to
-            # place, not two, even though it names two "characters". char_name
-            # is None here because len(human_characters) >= 2 is genuine
-            # ambiguity among real characters - this path replaces that gap
-            # with a structural headcount/position guarantee instead, see
-            # _generate_with_pose_controlnet
-            image = self._generate_with_pose_controlnet(prompt, len(human_characters), gen_width, gen_height, generator)
-        else:
+        )
+
+        def _generate_once(gen, negative_prompt: str | None = None) -> Image.Image:
+            if use_pose_controlnet_path:
+                # counts human_characters, not panel.characters - a panel
+                # tagging one real character plus one or more abstract/no-form
+                # ones (see _split_by_abstractness) has only one real body to
+                # place, not two, even though it names two "characters".
+                # char_name is None here because len(human_characters) >= 2
+                # is genuine ambiguity among real characters - this path
+                # replaces that gap with a structural headcount/position
+                # guarantee instead, see _generate_with_pose_controlnet
+                return self._generate_with_pose_controlnet(prompt, len(human_characters), gen_width, gen_height, gen)
             result = self._base_pipe(
                 prompt=prompt,
+                negative_prompt=negative_prompt,
                 num_inference_steps=self.cfg.steps,
                 guidance_scale=self.cfg.guidance_scale,
                 width=gen_width,
                 height=gen_height,
-                generator=generator,
+                generator=gen,
                 **self._ip_kwargs(self._base_pipe, char_image, char_scale, loc_image, loc_scale),
             )
-            image = result.images[0]
+            return result.images[0]
+
+        image = _generate_once(generator)
+
+        # quality-review retry: only for a panel that resolved to exactly one
+        # real character with a reference image to check against - the
+        # pose-ControlNet path (2+ real characters) and abstract/no-form
+        # characters have no single "expected face count" to compare against,
+        # so they're not eligible (see _count_character_faces)
+        if self.cfg.use_quality_review and not use_pose_controlnet_path and char_image is not None:
+            for attempt in range(1, self.cfg.quality_review_max_retries + 1):
+                if self._count_character_faces(image, char_image) == 1:
+                    break
+                retry_seed = _seed_for(story_id, page_index, panel_index, attempt=attempt)
+                # the review only ever flags a face-count mismatch (see
+                # _count_character_faces's prompt) - a targeted negative
+                # prompt reinforcing that specific defect category on top of
+                # the reseed, rather than relying on the reseed alone to
+                # stumble onto a better result
+                image = _generate_once(
+                    torch.Generator(device=self.device).manual_seed(retry_seed),
+                    negative_prompt=_QUALITY_REVIEW_RETRY_NEGATIVE_PROMPT,
+                )
+
         if (gen_width, gen_height) != size:
             image = image.resize(size)
         return image
