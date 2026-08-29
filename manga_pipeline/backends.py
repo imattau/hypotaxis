@@ -539,7 +539,7 @@ class DiffusersBackend(ImageBackend):
             self._prop_reference_image(name, story_id, style_prompt, prop_registry, force=force)
 
     def generate_character_lora_images(
-        self, story_id: str, name: str, style_prompt: str, registry: CharacterRegistry, count: int = 8
+        self, story_id: str, name: str, style_prompt: str, registry: CharacterRegistry, count: int = 8, seed: int = 0
     ) -> list[Path]:
         """Bootstrap `count` varied portrait images of `name` for
         train_character_lora.py, since there's no photo set to train a
