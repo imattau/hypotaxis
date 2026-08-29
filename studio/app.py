@@ -106,21 +106,25 @@ MODEL_CATALOG = {
         "name": "SDXL image model",
         "repo_id": "Darkknight535/RealCartoon-XL-v7-Diffusers",
         "purpose": "Panel and character image generation",
+        "required_file": "model_index.json",
     },
     "llm": {
         "name": "Story adaptation LLM",
         "repo_id": "Qwen/Qwen2.5-3B-Instruct",
         "purpose": "Prose to structured story adaptation",
+        "required_file": "config.json",
     },
     "captioner": {
         "name": "Captioner base model",
         "repo_id": "google-t5/t5-base",
         "purpose": "Optional captioner adapter inference and training",
+        "required_file": "config.json",
     },
     "controlnet": {
         "name": "Pose ControlNet",
         "repo_id": "xinsir/controlnet-openpose-sdxl-1.0",
         "purpose": "Multi-character pose consistency",
+        "required_file": "config.json",
     },
 }
 
@@ -271,10 +275,30 @@ def _finish_job(job: dict, status: str, message: str = "done") -> None:
 
 
 def _model_is_downloaded(repo_id: str) -> bool:
+    required_file = next(
+        (model["required_file"] for model in MODEL_CATALOG.values() if model["repo_id"] == repo_id),
+        "config.json",
+    )
+    cache_dirs = [HF_CACHE_DIR]
+    standard_cache = Path.home() / ".cache" / "huggingface"
+    if standard_cache != HF_CACHE_DIR:
+        cache_dirs.append(standard_cache)
     try:
-        from huggingface_hub import try_to_load_from_cache
+        from huggingface_hub import snapshot_download
 
-        return try_to_load_from_cache(repo_id, "config.json", cache_dir=str(HF_CACHE_DIR)) is not None
+        for cache_dir in cache_dirs:
+            try:
+                snapshot = Path(snapshot_download(
+                    repo_id,
+                    cache_dir=str(cache_dir),
+                    allow_patterns=[required_file],
+                    local_files_only=True,
+                ))
+                if (snapshot / required_file).is_file():
+                    return True
+            except (OSError, RuntimeError, ValueError):
+                continue
+        return False
     except (ImportError, OSError, ValueError):
         return False
 
@@ -309,7 +333,7 @@ def settings():
         "models": [
             {
                 "key": key,
-                **model,
+                **{name: value for name, value in model.items() if name != "required_file"},
                 "downloaded": _model_is_downloaded(model["repo_id"]),
             }
             for key, model in MODEL_CATALOG.items()
