@@ -7,6 +7,7 @@ loopback-only port and hands that URL to pywebview2.
 from __future__ import annotations
 
 import argparse
+import os
 import socket
 import threading
 import time
@@ -49,6 +50,10 @@ def main() -> None:
             "Desktop dependencies are missing. Install with "
             "'pip install -r requirements-desktop.txt'."
         ) from exc
+
+    # The packaged application is read-only.  Tell the studio to keep stories,
+    # generated work, and model caches in the platform's user data directory.
+    os.environ.setdefault("HYPOTAXIS_DESKTOP", "1")
 
     port = args.port or _free_port()
     config = uvicorn.Config(

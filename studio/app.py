@@ -20,6 +20,23 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+
+def _user_data_root() -> Path:
+    """Return a writable per-user root when running the packaged desktop app."""
+
+    override = os.environ.get("HYPOTAXIS_DATA_DIR", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    if not os.environ.get("HYPOTAXIS_DESKTOP"):
+        return ROOT
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share")
+    return Path(base).expanduser() / "Hypotaxis"
+
 from manga_pipeline.captioner import Captioner  # noqa: E402
 from manga_pipeline.adapter_distribution import (  # noqa: E402
     build_manifest,
@@ -69,18 +86,60 @@ from manga_pipeline.story_adapt import (  # noqa: E402
     parse_prop_profiles,
 )
 
-STORIES_DIR = ROOT / "stories"
-REGISTRY_DIR = ROOT / "registry"
-OUTPUT_DIR = ROOT / "output"
-DATASET_PATH = ROOT / "data" / "caption_pairs.jsonl"
+DATA_ROOT = _user_data_root()
+STORIES_DIR = DATA_ROOT / "stories"
+REGISTRY_DIR = DATA_ROOT / "registry"
+OUTPUT_DIR = DATA_ROOT / "output"
+DATASET_PATH = DATA_ROOT / "data" / "caption_pairs.jsonl"
 # canonical location train_captioner.py's CLI defaults write to
 # (--output-dir models/captioner) - see README's "Curating a clean caption
 # dataset" for how to produce this
 CAPTIONER_ADAPTER_DIR = ROOT / "models" / "captioner" / "adapter"
 CAPTIONER_BASE_MODEL = "google-t5/t5-base"
-MODELS_DIR = ROOT / "models"
+MODELS_DIR = DATA_ROOT / "models"
+HF_CACHE_DIR = MODELS_DIR / "huggingface"
 SEED_STATE_PATH = MODELS_DIR / "shared_adapters" / ".seeding.json"
 REQUIRE_NOSTR_SIGNATURES = os.getenv("HYPOTAXIS_REQUIRE_NOSTR_SIGNATURES", "").strip().lower() in {"1", "true", "yes", "on"}
+
+MODEL_CATALOG = {
+    "sdxl": {
+        "name": "SDXL image model",
+        "repo_id": "Darkknight535/RealCartoon-XL-v7-Diffusers",
+        "purpose": "Panel and character image generation",
+    },
+    "llm": {
+        "name": "Story adaptation LLM",
+        "repo_id": "Qwen/Qwen2.5-3B-Instruct",
+        "purpose": "Prose to structured story adaptation",
+    },
+    "captioner": {
+        "name": "Captioner base model",
+        "repo_id": "google-t5/t5-base",
+        "purpose": "Optional captioner adapter inference and training",
+    },
+    "controlnet": {
+        "name": "Pose ControlNet",
+        "repo_id": "xinsir/controlnet-openpose-sdxl-1.0",
+        "purpose": "Multi-character pose consistency",
+    },
+}
+
+
+def _ensure_desktop_seed_data() -> None:
+    if DATA_ROOT == ROOT:
+        return
+    for name in ("stories", "registry"):
+        source_dir = ROOT / name
+        target_dir = DATA_ROOT / name
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for source in source_dir.glob("*.json"):
+            target = target_dir / source.name
+            if not target.exists():
+                shutil.copy2(source, target)
+
+
+_ensure_desktop_seed_data()
+os.environ.setdefault("HF_HOME", str(HF_CACHE_DIR))
 
 
 def _require_signature_backend() -> None:
@@ -209,6 +268,66 @@ def _finish_job(job: dict, status: str, message: str = "done") -> None:
     job["status"] = status
     job["message"] = message
     job["finished_at"] = time.time()
+
+
+def _model_is_downloaded(repo_id: str) -> bool:
+    try:
+        from huggingface_hub import try_to_load_from_cache
+
+        return try_to_load_from_cache(repo_id, "config.json", cache_dir=str(HF_CACHE_DIR)) is not None
+    except (ImportError, OSError, ValueError):
+        return False
+
+
+def _run_model_download_job(job_id: str, model_key: str) -> None:
+    job = _jobs[job_id]
+    model = MODEL_CATALOG[model_key]
+    job["status"] = "running"
+    job["message"] = f"downloading {model['repo_id']}"
+    try:
+        from huggingface_hub import snapshot_download
+
+        path = snapshot_download(model["repo_id"], cache_dir=str(HF_CACHE_DIR), resume_download=True)
+        job["model_key"] = model_key
+        job["path"] = path
+        _finish_job(job, "done", f"downloaded {model['name']}")
+    except Exception as exc:  # noqa: BLE001
+        _finish_job(job, "error", str(exc))
+
+
+class ModelDownloadRequest(BaseModel):
+    model_key: str = Field(min_length=1, max_length=40)
+
+
+@app.get("/api/settings")
+def settings():
+    return {
+        "data_dir": str(DATA_ROOT),
+        "stories_dir": str(STORIES_DIR),
+        "output_dir": str(OUTPUT_DIR),
+        "models_dir": str(MODELS_DIR),
+        "models": [
+            {
+                "key": key,
+                **model,
+                "downloaded": _model_is_downloaded(model["repo_id"]),
+            }
+            for key, model in MODEL_CATALOG.items()
+        ],
+    }
+
+
+@app.post("/api/settings/models/download")
+def download_model(req: ModelDownloadRequest):
+    if req.model_key not in MODEL_CATALOG:
+        raise HTTPException(404, "unknown model")
+    for job in _jobs.values():
+        if job.get("model_key") == req.model_key and job.get("status") in {"queued", "running"}:
+            return {"job_id": next(job_id for job_id, candidate in _jobs.items() if candidate is job)}
+    job_id = _create_job()
+    thread = threading.Thread(target=_run_model_download_job, args=(job_id, req.model_key), daemon=True)
+    thread.start()
+    return {"job_id": job_id}
 
 
 def _validate_story_id(story_id: str) -> str:

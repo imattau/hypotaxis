@@ -13,6 +13,17 @@ python run_desktop.py
 `--port 0` (the default) chooses a free loopback port. The launcher shuts down
 the embedded Uvicorn server when the native window closes.
 
+The packaged desktop app stores writable data in the OS user-data directory:
+
+- Linux: `~/.local/share/Hypotaxis`
+- macOS: `~/Library/Application Support/Hypotaxis`
+- Windows: `%LOCALAPPDATA%\\Hypotaxis`
+
+This contains stories, registries, generated output, and downloaded model
+caches. Set `HYPOTAXIS_DATA_DIR` to override it for development or portable
+installs. Open the Settings tab to download the SDXL, story-adaptation LLM,
+captioner, and pose-ControlNet model files.
+
 ## GitHub Actions builds
 
 The `Build desktop applications` workflow builds independently on Ubuntu,

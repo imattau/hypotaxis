@@ -5,4 +5,5 @@ pywebview2
 # AppImage so it does not depend on a system Python installation.
 qtpy
 PySide6
+huggingface-hub
 pyinstaller

@@ -6,6 +6,7 @@ const navLibrary = document.getElementById("nav-library");
 const navNew = document.getElementById("nav-new");
 const navDataset = document.getElementById("nav-dataset");
 const navAdapters = document.getElementById("nav-adapters");
+const navSettings = document.getElementById("nav-settings");
 const nostrPool = new SimplePool();
 const localAdapterVersions = new Map();
 
@@ -14,12 +15,14 @@ function setNav(active) {
   navNew.classList.toggle("active", active === "new");
   navDataset.classList.toggle("active", active === "dataset");
   navAdapters.classList.toggle("active", active === "adapters");
+  navSettings.classList.toggle("active", active === "settings");
 }
 
 navLibrary.addEventListener("click", showLibrary);
 navNew.addEventListener("click", showNewStory);
 navDataset.addEventListener("click", showDatasetCuration);
 navAdapters.addEventListener("click", showAdapters);
+navSettings.addEventListener("click", showSettings);
 
 async function api(path, options) {
   const res = await fetch(path, options);
@@ -34,6 +37,69 @@ function el(html) {
   const template = document.createElement("template");
   template.innerHTML = html.trim();
   return template.content.firstElementChild;
+}
+
+// ---------- Settings ----------
+
+async function showSettings() {
+  setNav("settings");
+  main.innerHTML = "<p class='empty-state'>Loading settings...</p>";
+  const settings = await api("/api/settings");
+  const cards = settings.models.map((model) => `
+    <div class="card model-card">
+      <h3>${escapeHtml(model.name)}</h3>
+      <div class="meta">${escapeHtml(model.repo_id)}</div>
+      <p>${escapeHtml(model.purpose)}</p>
+      <span class="badge model-status">${model.downloaded ? "Downloaded" : "Not downloaded"}</span>
+      <button class="btn secondary model-download" data-model-key="${escapeHtml(model.key)}" type="button" ${model.downloaded ? "disabled" : ""}>
+        ${model.downloaded ? "Ready" : "Download model"}
+      </button>
+      <div class="status-line model-message"></div>
+    </div>
+  `).join("");
+  main.innerHTML = `
+    <section class="section-heading"><h2>Settings</h2><p>Desktop data is stored in your per-user application folder. Models are downloaded once and reused locally.</p></section>
+    <div class="card path-card">
+      <h3>Storage</h3>
+      <div class="meta">Data: ${escapeHtml(settings.data_dir)}</div>
+      <div class="meta">Output: ${escapeHtml(settings.output_dir)}</div>
+      <div class="meta">Models: ${escapeHtml(settings.models_dir)}</div>
+    </div>
+    <h2>Models</h2><div class="grid settings-grid">${cards}</div>
+  `;
+  main.querySelectorAll(".model-download").forEach((button) => {
+    button.addEventListener("click", () => downloadModel(button, button.dataset.modelKey));
+  });
+}
+
+async function downloadModel(button, modelKey) {
+  const card = button.closest(".model-card");
+  const status = card.querySelector(".model-message");
+  button.disabled = true;
+  status.textContent = "Starting download...";
+  try {
+    const { job_id } = await api("/api/settings/models/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_key: modelKey }),
+    });
+    let job;
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      job = await api(`/api/jobs/${job_id}`);
+      status.textContent = job.message || job.status;
+    } while (job.status === "queued" || job.status === "running");
+    if (job.status === "done") {
+      status.textContent = "Ready for use.";
+      card.querySelector(".model-status").textContent = "Downloaded";
+      button.textContent = "Ready";
+    } else {
+      throw new Error(job.message || "download failed");
+    }
+  } catch (error) {
+    status.textContent = error.message;
+    button.disabled = false;
+  }
 }
 
 // ---------- Library ----------
