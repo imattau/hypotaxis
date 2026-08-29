@@ -9,6 +9,7 @@ const navAdapters = document.getElementById("nav-adapters");
 const navSettings = document.getElementById("nav-settings");
 const nostrPool = new SimplePool();
 const localAdapterVersions = new Map();
+let loraTrainingActive = false;
 
 function setNav(active) {
   navLibrary.classList.toggle("active", active === "library");
@@ -1673,7 +1674,7 @@ function renderCharacters(characters, emptyMessage, storyId, kind) {
       ? `<img src="${c.reference_image_url}" alt="${escapeHtml(name)}" />`
       : `<div class="placeholder">Not designed yet</div>`;
     const loraBadge = c.has_lora ? `<div class="meta">LoRA trained</div>` : "";
-    const loraButton = kind === "registry" ? `<button class="btn secondary lora-train-btn">Train LoRA</button>` : "";
+    const loraButton = kind === "registry" ? `<button class="btn secondary lora-train-btn" ${loraTrainingActive ? "disabled" : ""}>${loraTrainingActive ? "Training another character..." : "Train LoRA"}</button>` : "";
     const card = el(`
       <div class="card char-card">
         <button class="card-delete" title="Delete ${escapeHtml(name)}">&times;</button>
@@ -1718,6 +1719,7 @@ async function startCharacterLoraTraining(storyId, name, button, status) {
     return;
   }
   button.disabled = true;
+  setLoraTrainingBusy(true, button);
   status.classList.remove("error");
   status.textContent = "Starting...";
   try {
@@ -1730,8 +1732,20 @@ async function startCharacterLoraTraining(storyId, name, button, status) {
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
-    button.disabled = false;
+    setLoraTrainingBusy(false);
   }
+}
+
+function setLoraTrainingBusy(active, activeButton = null) {
+  loraTrainingActive = active;
+  document.querySelectorAll(".lora-train-btn").forEach((button) => {
+    button.disabled = active;
+    if (active && button !== activeButton) {
+      button.textContent = "Training another character...";
+    } else if (!active) {
+      button.textContent = "Train LoRA";
+    }
+  });
 }
 
 async function pollLoraJob(jobId, storyId, button, status) {
@@ -1739,19 +1753,20 @@ async function pollLoraJob(jobId, storyId, button, status) {
     const job = await api(`/api/jobs/${jobId}`);
     status.textContent = job.message;
     if (job.status === "done") {
+      setLoraTrainingBusy(false);
       await refreshIdentityGrids(storyId);
       return;
     }
     if (job.status === "error") {
       status.classList.add("error");
-      button.disabled = false;
+      setLoraTrainingBusy(false);
       return;
     }
     setTimeout(() => pollLoraJob(jobId, storyId, button, status), 2000);
   } catch (e) {
     status.textContent = "Error: " + e.message;
     status.classList.add("error");
-    button.disabled = false;
+    setLoraTrainingBusy(false);
   }
 }
 
