@@ -15,6 +15,7 @@ from manga_pipeline.story_adapt import (
     _caption_input,
     _layout_fits,
     _merge_person_aliases,
+    _split_dialogue_overflow,
     _normalize_quotes,
     _split_on_scene_breaks,
     _strip_markdown_structure,
@@ -36,6 +37,24 @@ def test_caption_input_appends_known_appearances_when_present():
     assert _caption_input("Jules walked in.", "Jules (auburn hair, leather jacket)") == (
         "Jules walked in.\nKnown appearances: Jules (auburn hair, leather jacket)"
     )
+
+
+def test_split_dialogue_overflow_preserves_order_in_continuation_panels():
+    panel = Panel(
+        scene_description="Jules and Nova face each other.",
+        characters=["Jules", "Nova"],
+        dialogue=[DialogueLine(speaker="Jules", text=f"Line {i}") for i in range(8)],
+    )
+    result = _split_dialogue_overflow([panel])
+    assert [len(p.dialogue) for p in result] == [3, 3, 2]
+    assert [line.text for p in result for line in p.dialogue] == [f"Line {i}" for i in range(8)]
+    assert all(p.scene_description == panel.scene_description for p in result)
+
+
+def test_split_dialogue_overflow_keeps_short_panels_unchanged():
+    panel = Panel(scene_description="a", dialogue=[DialogueLine(speaker="Aiko", text="Hello")])
+    result = _split_dialogue_overflow([panel])
+    assert result == [panel]
 
 
 def test_caption_input_omits_known_appearances_when_absent():

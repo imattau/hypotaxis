@@ -122,6 +122,52 @@ def test_render_bubbles_does_not_crash_on_dialogue_dense_panel():
     assert result.size == (600, 900)
 
 
+def test_render_bubbles_accepts_a_reserved_caption_area_and_reports_overflow():
+    page = Page(
+        layout="H3",
+        panels=[
+            Panel(
+                scene_description="a",
+                dialogue=[DialogueLine(speaker="Nova", text=f"Line {i} " * 20) for i in range(50)],
+            ),
+            Panel(scene_description="b"),
+            Panel(scene_description="c"),
+        ],
+    )
+    warnings = []
+    img = Image.new("RGB", (600, 900), (255, 255, 255))
+    result = render_bubbles(img, page, (600, 900), caption_reserve_fraction=0.30, on_warning=warnings.append)
+    assert result.size == (600, 900)
+    assert warnings
+
+
+def test_render_bubbles_reports_minimum_font_without_caption_reserve():
+    page = Page(
+        layout="H3",
+        panels=[
+            Panel(
+                scene_description="a",
+                dialogue=[DialogueLine(speaker="Nova", text=f"Line {i} " * 20) for i in range(50)],
+            ),
+            Panel(scene_description="b"),
+            Panel(scene_description="c"),
+        ],
+    )
+    warnings = []
+    render_bubbles(Image.new("RGB", (600, 900), "white"), page, (600, 900), on_warning=warnings.append)
+    assert any("minimum lettering size" in warning for warning in warnings)
+
+
+def test_render_bubbles_rejects_invalid_caption_reserve():
+    page = Page(layout="H2", panels=[Panel(scene_description="a"), Panel(scene_description="b")])
+    img = Image.new("RGB", (400, 600), (255, 255, 255))
+    try:
+        render_bubbles(img, page, (400, 600), caption_reserve_fraction=1.0)
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
+
+
 def test_render_bubbles_skips_panels_with_no_dialogue():
     page = Page(layout="H2", panels=[Panel(scene_description="a"), Panel(scene_description="b")])
     blank = Image.new("RGB", (400, 600), (255, 255, 255)).tobytes()

@@ -82,6 +82,40 @@ def test_run_resumes_by_skipping_already_generated_pages(tmp_path, monkeypatch):
     assert page_0_path.stat().st_mtime_ns == first_mtime  # file untouched
 
 
+def test_run_invalidates_pages_when_generation_inputs_change(tmp_path, monkeypatch):
+    story = _two_page_story("fingerprint_test")
+    cfg = _cfg(tmp_path)
+    run(story, cfg)
+
+    calls = []
+    from manga_pipeline import backends
+
+    original = backends.MockBackend.generate_panel
+
+    def tracking_generate_panel(self, story_id, page_index, *args, **kwargs):
+        calls.append(page_index)
+        return original(self, story_id, page_index, *args, **kwargs)
+
+    monkeypatch.setattr(backends.MockBackend, "generate_panel", tracking_generate_panel)
+    changed = _cfg(tmp_path)
+    changed.seed = 42
+    run(story, changed)
+
+    assert calls == [0, 0, 1, 1]
+
+
+def test_run_writes_production_manifest(tmp_path):
+    story = _two_page_story("manifest_test")
+    cfg = _cfg(tmp_path)
+    run(story, cfg)
+
+    import json
+
+    manifest = json.loads((tmp_path / "output" / "manifest_test" / "production.json").read_text())
+    assert manifest["format"] == 1
+    assert set(manifest["pages"]) == {"0", "1"}
+
+
 def test_run_force_regenerates_everything(tmp_path, monkeypatch):
     story = _two_page_story("force_test")
     cfg = _cfg(tmp_path)

@@ -323,6 +323,8 @@ def render_bubbles(
     page: Page,
     page_size: tuple[int, int],
     panel_images: list[Image.Image] | None = None,
+    caption_reserve_fraction: float = 0.0,
+    on_warning=None,
 ) -> Image.Image:
     """panel_images: the same list generate_panel() produced for this page
     (already resized to each panel's own box - see pipeline.run()), used to
@@ -331,6 +333,8 @@ def render_bubbles(
     best-effort: omit it (or a panel where detection finds nothing) and
     bubbles render exactly as before, tail-less, at the same position.
     """
+    if not 0.0 <= caption_reserve_fraction < 1.0:
+        raise ValueError("caption_reserve_fraction must be between 0 and 1")
     if page_img.mode != "RGBA":
         page_img = page_img.convert("RGBA")
     draw = ImageDraw.Draw(page_img)
@@ -356,6 +360,8 @@ def render_bubbles(
         panel_w, panel_h = box_px[2] - box_px[0], box_px[3] - box_px[1]
         if not panel.dialogue:
             continue
+        dialogue_bottom = box_px[3] - round(panel_h * caption_reserve_fraction)
+        dialogue_h = max(1, dialogue_bottom - box_px[1])
 
         anchors: list[tuple[float, float]] = []
         if detector is not None and panel_index < len(panel_images):
@@ -363,13 +369,22 @@ def render_bubbles(
             anchors = [(box_px[0] + ax, box_px[1] + ay) for ax, ay in local_anchors]
 
         dialogue = _merge_consecutive(panel.dialogue)
-        font = load_font(_font_size_for_panel(draw, dialogue, panel_w, panel_h, base_size))
+        font_size = _font_size_for_panel(draw, dialogue, panel_w, dialogue_h, base_size)
+        font = load_font(font_size)
+        if font_size == _MIN_FONT_SIZE:
+            if on_warning is not None:
+                on_warning(
+                    f"panel {panel_index + 1}: dialogue needs minimum lettering size; "
+                    "some lines may be omitted before the caption area"
+                )
 
         cursor_y = box_px[1]
         for line_index, line in enumerate(dialogue):
-            if box_px[3] - cursor_y < _MIN_FONT_SIZE + 8:
-                break  # no usable room left in this panel even at the minimum font size
-            local_box = (box_px[0], cursor_y, box_px[2], box_px[3])
+            if dialogue_bottom - cursor_y < _MIN_FONT_SIZE + 8:
+                if on_warning is not None:
+                    on_warning(f"panel {panel_index + 1}: omitted dialogue after the lettering area filled")
+                break
+            local_box = (box_px[0], cursor_y, box_px[2], dialogue_bottom)
             # no reliable way to match a dialogue line's speaker to a
             # specific detected face from pixels alone (same open problem
             # as pose-ControlNet's multi-figure identity assignment) - cycle

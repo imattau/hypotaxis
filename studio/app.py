@@ -1350,6 +1350,7 @@ class GenerateRequest(BaseModel):
     pose_controlnet_scale: float = Field(0.5, ge=0, le=2)
     use_quality_review: bool = False
     quality_review_max_retries: int = Field(2, ge=0, le=5)
+    seed: int = 0
     force: bool = False
 
 
@@ -1399,6 +1400,7 @@ def generate(story_id: str, req: GenerateRequest):
         pose_controlnet_scale=req.pose_controlnet_scale,
         use_quality_review=req.use_quality_review,
         quality_review_max_retries=req.quality_review_max_retries,
+        seed=req.seed,
         output_dir=str(OUTPUT_DIR),
         registry_dir=str(REGISTRY_DIR),
     )

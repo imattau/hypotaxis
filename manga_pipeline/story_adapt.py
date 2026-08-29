@@ -116,6 +116,7 @@ def target_panel_count(word_count: int, min_panels: int = 6, max_panels: int = 9
 
 
 _MAX_DIALOGUE_PER_CHUNK = 3
+_MAX_DIALOGUE_CHARS_PER_PANEL = 240
 
 
 def _dialogue_span_count(text: str) -> int:
@@ -126,6 +127,47 @@ def _dialogue_span_count(text: str) -> int:
     quote*"/single-word-italics exclusions) is fine here: this only feeds a
     chunk-boundary heuristic, not the actual dialogue extraction."""
     return len(_QUOTE_RE.findall(text)) + len(_THOUGHT_RE.findall(text))
+
+
+def _split_dialogue_overflow(panels: list[Panel]) -> list[Panel]:
+    """Split dialogue-heavy panels into readable continuation panels.
+
+    The segmenter normally keeps this under control, but manually edited or
+    legacy Story JSON can still contain a dozen turns in one panel. Keeping
+    every line is preferable to silently dropping it or reducing lettering to
+    an unreadable size, so continuation panels repeat the visual context and
+    carry the dialogue forward in source order.
+    """
+    result: list[Panel] = []
+    for panel in panels:
+        if not panel.dialogue:
+            result.append(panel)
+            continue
+        groups: list[list[DialogueLine]] = []
+        current: list[DialogueLine] = []
+        current_chars = 0
+        for line in panel.dialogue:
+            line_chars = len(line.text)
+            if current and (len(current) >= _MAX_DIALOGUE_PER_CHUNK or current_chars + line_chars > _MAX_DIALOGUE_CHARS_PER_PANEL):
+                groups.append(current)
+                current = []
+                current_chars = 0
+            current.append(line)
+            current_chars += line_chars
+        if current:
+            groups.append(current)
+        for index, dialogue in enumerate(groups):
+            result.append(
+                Panel(
+                    scene_description=panel.scene_description,
+                    characters=list(panel.characters),
+                    locations=list(panel.locations),
+                    props=list(panel.props),
+                    camera_hint=panel.camera_hint,
+                    dialogue=dialogue,
+                )
+            )
+    return result
 
 
 def segment_text(
@@ -1002,5 +1044,5 @@ def adapt_story(
         )
 
     report("laying out pages")
-    pages = pack_into_pages(panels)
+    pages = pack_into_pages(_split_dialogue_overflow(panels))
     return Story(id=story_id, title=title, style_prompt=style_prompt, pages=pages)

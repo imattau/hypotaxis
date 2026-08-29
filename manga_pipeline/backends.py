@@ -302,6 +302,7 @@ class ImageBackend(ABC):
         registry: CharacterRegistry | None,
         location_registry: CharacterRegistry | None = None,
         prop_registry: CharacterRegistry | None = None,
+        seed: int = 0,
     ) -> Image.Image:
         """Generate a single panel image at its own target size (the actual
         pixel dimensions of its box in the page layout). Each panel is
@@ -333,9 +334,10 @@ class MockBackend(ImageBackend):
         registry: CharacterRegistry | None,
         location_registry: CharacterRegistry | None = None,
         prop_registry: CharacterRegistry | None = None,
+        seed: int = 0,
     ) -> Image.Image:
-        seed = _seed_for(story_id, page_index, panel_index)
-        hue = seed % 360
+        panel_seed = _seed_for(f"{story_id}:seed:{seed}", page_index, panel_index)
+        hue = panel_seed % 360
         color = _hsv_to_rgb(hue, 0.45, 0.9)
         img = Image.new("RGB", size, color)
         draw = ImageDraw.Draw(img)
@@ -893,12 +895,13 @@ class DiffusersBackend(ImageBackend):
         registry: CharacterRegistry | None,
         location_registry: CharacterRegistry | None = None,
         prop_registry: CharacterRegistry | None = None,
+        seed: int = 0,
     ) -> Image.Image:
         self._load()
         import torch
 
-        seed = _seed_for(story_id, page_index, panel_index)
-        generator = torch.Generator(device=self.device).manual_seed(seed)
+        panel_seed = _seed_for(f"{story_id}:seed:{seed}", page_index, panel_index)
+        generator = torch.Generator(device=self.device).manual_seed(panel_seed)
         prompt = _build_prompt(style_prompt, panel, prop_registry)
 
         human_characters, abstract_characters = _split_by_abstractness(panel.characters, registry)
@@ -991,7 +994,7 @@ class DiffusersBackend(ImageBackend):
             for attempt in range(1, self.cfg.quality_review_max_retries + 1):
                 if self._count_character_faces(image, char_image) == 1:
                     break
-                retry_seed = _seed_for(story_id, page_index, panel_index, attempt=attempt)
+                retry_seed = _seed_for(f"{story_id}:seed:{seed}", page_index, panel_index, attempt=attempt)
                 # the review only ever flags a face-count mismatch (see
                 # _count_character_faces's prompt) - a targeted negative
                 # prompt reinforcing that specific defect category on top of

@@ -19,6 +19,7 @@ def main() -> None:
     parser.add_argument("--page-height", type=int, default=1536)
     parser.add_argument("--output-dir", default="output")
     parser.add_argument("--registry-dir", default="registry")
+    parser.add_argument("--seed", type=int, default=0, help="deterministic generation seed")
     parser.add_argument("--no-identity-adapter", action="store_true", help="disable the Phase 4 IP-Adapter identity conditioning")
     parser.add_argument("--identity-adapter-scale", type=float, default=0.6)
     args = parser.parse_args()
@@ -35,6 +36,7 @@ def main() -> None:
         registry_dir=args.registry_dir,
         use_identity_adapter=not args.no_identity_adapter,
         identity_adapter_scale=args.identity_adapter_scale,
+        seed=args.seed,
     )
 
     story = Story.load(args.story)

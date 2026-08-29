@@ -1876,6 +1876,7 @@ function renderGeneratePanel(storyId) {
         by default: real extra VRAM/time cost on top of an already resource-heavy pipeline.
       </div>
       <label><input type="checkbox" id="g-force" style="width:auto;display:inline-block;margin-right:6px;" />Regenerate existing pages too</label>
+      <label>Seed <input type="number" id="g-seed" value="0" step="1" /></label>
       <div class="status-line">
         Off by default: a page whose image already exists on disk is reused rather than
         redrawn, so a job that stopped partway (a crash, an out-of-memory error) can be
@@ -1917,6 +1918,7 @@ async function startGeneration(storyId) {
   const use_quality_review = document.getElementById("g-quality-review").value === "true";
   const quality_review_max_retries = parseInt(document.getElementById("g-quality-review-retries").value, 10);
   const force = document.getElementById("g-force").checked;
+  const seed = parseInt(document.getElementById("g-seed").value, 10) || 0;
   const status = document.getElementById("g-status");
   const button = document.getElementById("g-submit");
 
@@ -1940,6 +1942,7 @@ async function startGeneration(storyId) {
         pose_controlnet_scale,
         use_quality_review,
         quality_review_max_retries,
+        seed,
         force,
       }),
     });
