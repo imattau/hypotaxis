@@ -2,11 +2,15 @@
   "Mill": {
     "name": "Mill",
     "description": "old wooden watermill beside a river, moss-covered walls, large wooden waterwheel",
-    "reference_image": "output/mill_test/locations/Mill.png"
+    "reference_image": "output/mill_test/locations/Mill-a5feb9527e.png",
+    "is_abstract": false,
+    "lora_path": ""
   },
   "Vault": {
     "name": "Vault",
     "description": "heavy steel bank vault door, dim warehouse lighting, stacked wooden crates nearby",
-    "reference_image": "output/mill_test/locations/Vault.png"
+    "reference_image": "output/mill_test/locations/Vault-5d55c415e3.png",
+    "is_abstract": false,
+    "lora_path": ""
   }
 }

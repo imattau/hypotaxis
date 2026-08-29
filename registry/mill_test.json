@@ -2,16 +2,22 @@
   "Aiko": {
     "name": "Aiko",
     "description": "young woman, shoulder-length black bob haircut, tan raincoat, red satchel",
-    "reference_image": "output/mill_test/characters/Aiko.png"
+    "reference_image": "output/mill_test/characters/Aiko-e461b51d11.png",
+    "is_abstract": false,
+    "lora_path": ""
   },
   "Ren": {
     "name": "Ren",
     "description": "young man, short dark hair, casual jacket over a plain shirt",
-    "reference_image": "output/mill_test/characters/Ren.png"
+    "reference_image": "output/mill_test/characters/Ren-2c826edf49.png",
+    "is_abstract": false,
+    "lora_path": ""
   },
   "Kessa": {
     "name": "Kessa",
     "description": "Kessa has short, dark hair and wears a simple, casual outfit consisting of a t-shirt and jeans.",
-    "reference_image": "output/mill_test/characters/Kessa.png"
+    "reference_image": "output/mill_test/characters/Kessa-833d6ae534.png",
+    "is_abstract": false,
+    "lora_path": ""
   }
 }
