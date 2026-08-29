@@ -1716,7 +1716,7 @@ function renderCharacters(characters, emptyMessage, storyId, kind) {
       ? `<img src="${c.reference_image_url}" alt="${escapeHtml(name)}" />`
       : `<div class="placeholder">Not designed yet</div>`;
     const loraBadge = c.has_lora ? `<div class="meta">LoRA trained</div>` : "";
-    const loraButton = kind === "registry" ? `<button class="btn secondary lora-train-btn" data-character="${escapeHtml(name)}" ${loraTrainingActive ? "disabled" : ""}>${loraTrainingActive ? "Training another character..." : "Train LoRA"}</button>` : "";
+    const loraButton = kind === "registry" ? `<button class="btn secondary lora-train-btn" data-character="${escapeHtml(name)}" data-has-lora="${c.has_lora ? "true" : "false"}" ${loraTrainingActive ? "disabled" : ""}>${loraTrainingActive ? "Training another character..." : c.has_lora ? "Retrain LoRA" : "Train LoRA"}</button>` : "";
     const card = el(`
       <div class="card char-card">
         <button class="card-delete" title="Delete ${escapeHtml(name)}">&times;</button>
@@ -1786,7 +1786,7 @@ function setLoraTrainingBusy(active, activeButton = null) {
     if (active && button !== activeButton) {
       button.textContent = "Training another character...";
     } else if (!active) {
-      button.textContent = "Train LoRA";
+      button.textContent = button.dataset.hasLora === "true" ? "Retrain LoRA" : "Train LoRA";
     }
   });
 }
