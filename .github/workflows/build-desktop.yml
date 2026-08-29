@@ -280,11 +280,27 @@ jobs:
           rpm_count=$(find packages -type f -name '*.rpm' | wc -l)
           test "${deb_count}" -gt 0
           test "${rpm_count}" -gt 0
-          find packages -type f -name '*.deb' -exec cp {} distribution/deb/pool/main/ \;
-          find packages -type f -name '*.rpm' -exec cp {} distribution/rpm/ \;
-          (cd distribution/deb && dpkg-scanpackages pool /dev/null | gzip -9c > dists/stable/main/binary-amd64/Packages.gz)
+          deb_file=$(find packages -type f -name '*.deb' -print -quit)
+          rpm_file=$(find packages -type f -name '*.rpm' -print -quit)
+          deb_name=$(basename "${deb_file}")
+          rpm_name=$(basename "${rpm_file}")
+          release_base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          rm -rf distribution/deb/pool/main distribution/rpm/repodata
+          mkdir -p distribution/deb/pool/main distribution/rpm
+          cp "${deb_file}" distribution/deb/pool/main/
+          cp "${rpm_file}" distribution/rpm/
+          (cd distribution/deb && dpkg-scanpackages pool /dev/null | \
+            sed "s#^Filename: pool/main/${deb_name}#Filename: ${release_base}/${deb_name}#" | \
+            gzip -9c > dists/stable/main/binary-amd64/Packages.gz)
           (cd distribution/deb && apt-ftparchive release dists/stable > dists/stable/Release)
-          createrepo_c --update distribution/rpm
+          createrepo_c --no-database --update distribution/rpm
+          for metadata in distribution/rpm/repodata/*.xml.gz; do
+            gunzip -c "${metadata}" | \
+              sed "s#href=\"${rpm_name}\"#href=\"${release_base}/${rpm_name}\"#g" | \
+              gzip -9c > "${metadata}.new"
+            mv "${metadata}.new" "${metadata}"
+          done
+          rm -f distribution/deb/pool/main/*.deb distribution/rpm/*.rpm
           export GNUPGHOME="${RUNNER_TEMP}/hypotaxis-gnupg"
           mkdir -m 700 -p "${GNUPGHOME}"
           printf '%s' "${GPG_PRIVATE_KEY}" | gpg --batch --import
@@ -306,7 +322,7 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add deb rpm index.html
+          git add -A deb rpm index.html
           git diff --cached --quiet || git commit -m "Publish Hypotaxis ${GITHUB_REF_NAME} packages"
           git push
 
