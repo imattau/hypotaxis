@@ -1194,10 +1194,10 @@ def get_pages(story_id: str):
 
 class PrepareCastRequest(BaseModel):
     backend: str = "mock"
-    checkpoint: str = "stabilityai/sdxl-turbo"
+    checkpoint: str = "Darkknight535/RealCartoon-XL-v7-Diffusers"
     device: str = "auto"
-    steps: int = Field(4, ge=1, le=100)
-    guidance_scale: float = Field(1.0, ge=0, le=30)
+    steps: int = Field(20, ge=1, le=100)
+    guidance_scale: float = Field(7.0, ge=0, le=30)
     use_identity_adapter: bool = True
     identity_adapter_scale: float = Field(0.6, ge=0, le=2)
     force: bool = False
@@ -1245,7 +1245,7 @@ def prepare_cast(story_id: str, req: PrepareCastRequest):
 
 
 class TrainCharacterLoraRequest(BaseModel):
-    checkpoint: str = "stabilityai/sdxl-turbo"
+    checkpoint: str = "Darkknight535/RealCartoon-XL-v7-Diffusers"
     device: str = "auto"
     bootstrap_count: int = Field(len(TRAINING_VIEW_PROMPTS), ge=1, le=len(TRAINING_VIEW_PROMPTS))
     steps: int = Field(300, ge=10, le=5000)
@@ -1337,17 +1337,19 @@ def train_lora(story_id: str, name: str, req: TrainCharacterLoraRequest):
 
 class GenerateRequest(BaseModel):
     backend: str = "mock"
-    checkpoint: str = "stabilityai/sdxl-turbo"
+    checkpoint: str = "Darkknight535/RealCartoon-XL-v7-Diffusers"
     device: str = "auto"
-    steps: int = Field(4, ge=1, le=100)
-    guidance_scale: float = Field(1.0, ge=0, le=30)
+    steps: int = Field(20, ge=1, le=100)
+    guidance_scale: float = Field(7.0, ge=0, le=30)
     use_identity_adapter: bool = True
     identity_adapter_scale: float = Field(0.6, ge=0, le=2)
-    use_character_lora: bool = False
+    use_character_lora: bool = True
     character_lora_scale: float = Field(0.8, ge=0, le=2)
     adapter_composition_path: str = Field("", max_length=500)
-    use_pose_controlnet: bool = False
+    use_pose_controlnet: bool = True
     pose_controlnet_scale: float = Field(0.5, ge=0, le=2)
+    use_quality_review: bool = False
+    quality_review_max_retries: int = Field(2, ge=0, le=5)
     force: bool = False
 
 
@@ -1395,6 +1397,8 @@ def generate(story_id: str, req: GenerateRequest):
         adapter_composition_path=composition_path,
         use_pose_controlnet=req.use_pose_controlnet,
         pose_controlnet_scale=req.pose_controlnet_scale,
+        use_quality_review=req.use_quality_review,
+        quality_review_max_retries=req.quality_review_max_retries,
         output_dir=str(OUTPUT_DIR),
         registry_dir=str(REGISTRY_DIR),
     )

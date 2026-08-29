@@ -1721,7 +1721,7 @@ function renderCastPanel(storyId) {
         </div>
         <div>
           <label>Steps</label>
-          <input type="number" id="c-steps" value="4" min="1" max="50" />
+          <input type="number" id="c-steps" value="20" min="1" max="100" />
         </div>
         <div>
           <label>Identity adapter</label>
@@ -1806,7 +1806,7 @@ function renderGeneratePanel(storyId) {
         </div>
         <div>
           <label>Steps</label>
-          <input type="number" id="g-steps" value="4" min="1" max="50" />
+          <input type="number" id="g-steps" value="20" min="1" max="100" />
         </div>
         <div>
           <label>Identity adapter</label>
@@ -1822,8 +1822,8 @@ function renderGeneratePanel(storyId) {
         <div>
           <label>Character LoRA</label>
           <select id="g-char-lora">
-            <option value="false">off</option>
             <option value="true">on</option>
+            <option value="false">off</option>
           </select>
         </div>
         <div>
@@ -1837,13 +1837,24 @@ function renderGeneratePanel(storyId) {
         <div>
           <label>Pose ControlNet</label>
           <select id="g-pose-controlnet">
-            <option value="false">off</option>
             <option value="true">on</option>
+            <option value="false">off</option>
           </select>
         </div>
         <div>
           <label>Pose scale</label>
           <input type="number" id="g-pose-controlnet-scale" value="0.5" min="0" max="2" step="0.05" />
+        </div>
+        <div>
+          <label>Quality review</label>
+          <select id="g-quality-review">
+            <option value="false">off</option>
+            <option value="true">on</option>
+          </select>
+        </div>
+        <div>
+          <label>Quality review retries</label>
+          <input type="number" id="g-quality-review-retries" value="2" min="0" max="5" />
         </div>
       </div>
       <div class="status-line">
@@ -1851,11 +1862,18 @@ function renderGeneratePanel(storyId) {
         above) - anyone else still falls back to identity adapter conditioning.
       </div>
       <div class="status-line">
-        Pose ControlNet only affects panels tagged with 2+ characters (identity adapter and
-        character LoRA already skip those, since blending multiple identities isn't solved) -
-        it fixes SDXL dropping/duplicating figures in such a panel, at real extra cost: a
-        separate full SDXL pipeline loaded on first use, ~7-8x slower per affected panel than
-        the normal path. Doesn't control which figure looks like which character.
+        Pose ControlNet only affects panels tagged with 2+ real (non-abstract) characters on a
+        camera hint other than close-up/extreme close-up (identity adapter and character LoRA
+        already skip such panels, since blending multiple identities isn't solved) - it fixes
+        SDXL dropping/duplicating figures in such a panel, at the cost of a second full SDXL
+        pipeline loaded on first use (one-time load/VRAM overhead per story, not a per-panel
+        cost). Doesn't control which figure looks like which character.
+      </div>
+      <div class="status-line">
+        Quality review loads a third model (Qwen2.5-VL, ~11GB) to check panels that resolved to
+        exactly one real character against that character's reference portrait, regenerating up
+        to the retry limit if the count comes back wrong (e.g. a spurious duplicate face). Off
+        by default: real extra VRAM/time cost on top of an already resource-heavy pipeline.
       </div>
       <label><input type="checkbox" id="g-force" style="width:auto;display:inline-block;margin-right:6px;" />Regenerate existing pages too</label>
       <div class="status-line">
@@ -1896,6 +1914,8 @@ async function startGeneration(storyId) {
   const adapter_composition_path = document.getElementById("g-composition").value;
   const use_pose_controlnet = document.getElementById("g-pose-controlnet").value === "true";
   const pose_controlnet_scale = parseFloat(document.getElementById("g-pose-controlnet-scale").value);
+  const use_quality_review = document.getElementById("g-quality-review").value === "true";
+  const quality_review_max_retries = parseInt(document.getElementById("g-quality-review-retries").value, 10);
   const force = document.getElementById("g-force").checked;
   const status = document.getElementById("g-status");
   const button = document.getElementById("g-submit");
@@ -1918,6 +1938,8 @@ async function startGeneration(storyId) {
         adapter_composition_path,
         use_pose_controlnet,
         pose_controlnet_scale,
+        use_quality_review,
+        quality_review_max_retries,
         force,
       }),
     });
