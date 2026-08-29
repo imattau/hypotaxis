@@ -44,6 +44,7 @@ if [[ -n "${APPIMAGETOOL}" ]]; then
     APP_DIR="${PACKAGE_DIR}/Hypotaxis.AppDir"
     mkdir -p "${APP_DIR}/usr/bin" "${APP_DIR}/usr/share/applications" "${APP_DIR}/usr/share/icons/hicolor/scalable/apps"
     install -m 0755 "${DIST_DIR}/hypotaxis" "${APP_DIR}/usr/bin/hypotaxis"
+    install -m 0755 "${ROOT_DIR}/packaging/AppRun" "${APP_DIR}/AppRun"
     install -m 0644 "${ROOT_DIR}/packaging/hypotaxis.desktop" "${APP_DIR}/hypotaxis.desktop"
     install -m 0644 "${ROOT_DIR}/packaging/hypotaxis.svg" "${APP_DIR}/hypotaxis.svg"
     install -m 0644 "${ROOT_DIR}/packaging/hypotaxis.desktop" "${APP_DIR}/usr/share/applications/hypotaxis.desktop"
