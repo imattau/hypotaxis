@@ -366,6 +366,21 @@ def extract_person_entities(text: str) -> list[str]:
     return names
 
 
+# A name spaCy's PERSON tagger only ever spots once across the whole
+# manuscript is either a false positive (an abstract/thematic word tagged
+# as a person - the same failure mode already documented for "Mill") or a
+# walk-on mention that doesn't warrant full character treatment: its own
+# registry entry, a generated reference portrait, and IP-Adapter/pose-
+# ControlNet eligibility. Only applied to NER-derived names below, never to
+# character_profiles/already-registered ones - an author-supplied cast
+# sheet is trusted regardless of how rarely a listed character appears.
+_MIN_NER_CHARACTER_MENTIONS = 2
+
+
+def _mention_count(name: str, text: str) -> int:
+    return len(re.findall(rf"\b{re.escape(name)}\b", text))
+
+
 def _merge_person_aliases(names: list[str], priority_names: list[str] | None = None) -> tuple[list[str], dict[str, str]]:
     """NER emits a separate span for each way a person is referred to across
     a document - "Dr. Mina Park", "Mina Park", "Park" - plus stray possessive
@@ -812,6 +827,22 @@ def adapt_story(
     # rather than creating its own separate canonical form.
     already_known = list(dict.fromkeys(list(character_profiles or {}) + list(registry.all())))
     person_entities, person_aliases = _merge_person_aliases(person_entities, priority_names=already_known)
+
+    # drop an NER-derived name (never an already_known one - see
+    # _MIN_NER_CHARACTER_MENTIONS) whose canonical form plus all its merged
+    # aliases together appear fewer than _MIN_NER_CHARACTER_MENTIONS times
+    # in the full text - counts aliases too, not just the canonical string,
+    # so a real character referred to mostly by a short form ("Park") isn't
+    # penalized for the canonical "Dr. Mina Park" rarely appearing verbatim
+    aliases_by_canonical: dict[str, list[str]] = {}
+    for alias, canonical in person_aliases.items():
+        aliases_by_canonical.setdefault(canonical, []).append(alias)
+    person_entities = [
+        name
+        for name in person_entities
+        if sum(_mention_count(alias, text) for alias in aliases_by_canonical.get(name, [name])) >= _MIN_NER_CHARACTER_MENTIONS
+    ]
+
     known_characters = list(dict.fromkeys(already_known + person_entities))
 
     last_speaker: str | None = next(iter(known_characters), None)
