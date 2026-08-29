@@ -229,7 +229,11 @@ jobs:
 
   publish-linux-repositories:
     name: Publish Debian and RPM repositories
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Repository publication needs credentials that are intentionally not
+    # present in every fork/local deployment. Keep GitHub release assets
+    # publishable without them; enable this job with the repository variable
+    # ENABLE_DISTRIBUTION_PUBLISH=true once all signing secrets are configured.
+    if: startsWith(github.ref, 'refs/tags/v') && vars.ENABLE_DISTRIBUTION_PUBLISH == 'true'
     runs-on: ubuntu-22.04
     needs: linux-packages
     permissions:
