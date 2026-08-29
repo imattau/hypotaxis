@@ -1950,6 +1950,26 @@ function renderGeneratePanel(storyId) {
     <div>
       <div class="row">
         <div>
+          <label>Mode</label>
+          <select id="g-mode">
+            <option value="production" selected>Production — generated artwork</option>
+            <option value="preview">Preview — fast layout test</option>
+          </select>
+        </div>
+        <div>
+          <label>Quality</label>
+          <select id="g-quality">
+            <option value="balanced" selected>Balanced</option>
+            <option value="fast">Fast</option>
+            <option value="best">Best</option>
+          </select>
+        </div>
+      </div>
+      <div class="status-line">Missing character references are prepared automatically. Output is saved in this story's output folder.</div>
+      <details class="advanced-settings">
+        <summary>Advanced generation settings</summary>
+      <div class="row">
+        <div>
           <label>Backend</label>
           <select id="g-backend">
             <option value="mock">mock (instant, no GPU)</option>
@@ -2034,11 +2054,20 @@ function renderGeneratePanel(storyId) {
         redrawn, so a job that stopped partway (a crash, an out-of-memory error) can be
         resumed by clicking Generate Pages again instead of starting over from page one.
       </div>
+      </details>
       <button class="btn" id="g-submit">Generate Pages</button>
       <div class="status-line" id="g-status"></div>
     </div>
   `);
+  wrap.querySelector("#g-backend").value = "diffusers";
   wrap.querySelector("#g-submit").addEventListener("click", () => startGeneration(storyId));
+  wrap.querySelector("#g-mode").addEventListener("change", (event) => {
+    wrap.querySelector("#g-backend").value = event.target.value === "preview" ? "mock" : "diffusers";
+  });
+  wrap.querySelector("#g-quality").addEventListener("change", (event) => {
+    const steps = { fast: 10, balanced: 20, best: 30 };
+    wrap.querySelector("#g-steps").value = steps[event.target.value];
+  });
   loadGenerationCompositions(wrap.querySelector("#g-composition"));
   return wrap;
 }
