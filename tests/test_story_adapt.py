@@ -23,6 +23,7 @@ from manga_pipeline.story_adapt import (
     names_in_chunk,
     pack_into_pages,
     parse_character_profiles,
+    parse_dialogue_review,
     parse_location_profiles,
     split_dialogue,
     split_sentences,
@@ -382,6 +383,41 @@ def test_split_dialogue_window_does_not_bleed_into_prior_quote_content():
     # quote) - it should fall back to a genuine "no signal" default
     # (last_speaker), not be hijacked into "Nova".
     assert lines[1].speaker != "Nova"
+
+
+# ---------- parse_dialogue_review ----------
+
+
+def test_parse_dialogue_review_applies_valid_corrections():
+    response = "1: Nova\n2: OK\n3: Jules"
+    corrections = parse_dialogue_review(response, count=3, known_characters=["Jules", "Nova"])
+    assert corrections == {0: "Nova", 2: "Jules"}
+
+
+def test_parse_dialogue_review_ignores_ok_case_insensitively_and_trailing_period():
+    response = "1: ok\n2: OK.\n3: Nova"
+    corrections = parse_dialogue_review(response, count=3, known_characters=["Jules", "Nova"])
+    assert corrections == {2: "Nova"}
+
+
+def test_parse_dialogue_review_drops_unknown_character_names():
+    # the model free-associated a name that isn't actually in this scene -
+    # applying it would be worse than leaving the original attribution
+    response = "1: Robot"
+    corrections = parse_dialogue_review(response, count=1, known_characters=["Jules", "Nova"])
+    assert corrections == {}
+
+
+def test_parse_dialogue_review_drops_out_of_range_line_numbers():
+    response = "1: Nova\n5: Jules"
+    corrections = parse_dialogue_review(response, count=2, known_characters=["Jules", "Nova"])
+    assert corrections == {0: "Nova"}
+
+
+def test_parse_dialogue_review_ignores_unparseable_lines():
+    response = "Sure, here is my review:\n1: Nova\nthat all looks right otherwise"
+    corrections = parse_dialogue_review(response, count=2, known_characters=["Jules", "Nova"])
+    assert corrections == {0: "Nova"}
 
 
 def test_split_dialogue_detects_italicized_thought():

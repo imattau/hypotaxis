@@ -622,6 +622,108 @@ def split_dialogue(
     return lines
 
 
+_DIALOGUE_REVIEW_PROMPT = """Characters in this scene: {character_notes}
+
+For each numbered line of dialogue below, decide independently which character is speaking, based only on the content of the line and who the characters are - ignore any assumptions about ordering or alternation.
+
+{lines}
+
+Reply with exactly one line per number, format:
+<number>: <character name>"""
+
+
+def _format_dialogue_for_review(dialogue: list[DialogueLine]) -> str:
+    # deliberately omits the currently-assigned speaker, unlike an earlier
+    # version of this prompt that showed it and asked the model to confirm
+    # or correct it - see review_dialogue_attribution's docstring for why:
+    # that passive "review" framing let the model coast (a real test
+    # returned "OK" for every line, including two confirmed-wrong ones).
+    # Asking for an independent guess, blind to what's currently assigned,
+    # forces an actual judgment instead of a rubber stamp.
+    return "\n".join(f'{i + 1}. "{line.text}"' for i, line in enumerate(dialogue))
+
+
+_DIALOGUE_REVIEW_LINE_RE = re.compile(r"^\s*(\d+)\s*:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def parse_dialogue_review(response: str, count: int, known_characters: list[str]) -> dict[int, str]:
+    """Parses review_dialogue_attribution's LLM response (one independent
+    speaker guess per line - see its docstring) into {0-based index: guessed
+    speaker}.
+
+    Silently drops anything that doesn't parse as "<number>: <text>", any
+    line number outside [1, count], "OK"/near-OK responses (case-insensitive,
+    a stray period tolerated - the current prompt doesn't offer "OK" as an
+    option, but a model ignoring that instruction shouldn't be parsed as a
+    literal character named "OK"), and any name not in known_characters - a
+    small instruct model asked for structured output sometimes free-
+    associates a name that isn't actually one of this scene's characters,
+    and applying that would be worse than leaving the original (possibly
+    also wrong) attribution in place."""
+    corrections: dict[int, str] = {}
+    for match in _DIALOGUE_REVIEW_LINE_RE.finditer(response):
+        try:
+            line_no = int(match.group(1))
+        except ValueError:
+            continue
+        if not (1 <= line_no <= count):
+            continue
+        name = match.group(2).strip().strip(".")
+        if name.upper() == "OK":
+            continue
+        if name not in known_characters:
+            continue
+        corrections[line_no - 1] = name
+    return corrections
+
+
+def review_dialogue_attribution(
+    dialogue: list[DialogueLine], characters: list[str], registry: CharacterRegistry, llm
+) -> list[DialogueLine]:
+    """Second-pass LLM check of split_dialogue's speaker attribution for one
+    chunk/panel - the grammatical-parse heuristic (_resolve_speaker_via_parse)
+    and its fallbacks (nearest name, ping-pong alternation between the two
+    active speakers) have no access to what the dialogue actually means, so
+    they can - and, on a real manuscript, did - assign a speaker that's
+    grammatically defensible but semantically wrong (a system-settings line
+    attributed to the human character instead of the AI assistant, and the
+    AI assistant's own casual "Yeah." attributed to the human). This asks
+    the same small instruct model Stage A already loads for captioning to
+    independently judge each line against the characters' own descriptions,
+    mirroring the pattern DiffusersBackend._count_character_faces uses to
+    review generated images against a reference - grounded review catching
+    what a purely structural/grammatical pass can't.
+
+    Framed as an independent per-line guess, not "review this assignment
+    and correct it if wrong": a first version of this prompt showed the
+    model the current (sometimes-wrong) speaker and asked it to confirm or
+    correct - real testing found the model just returned "OK" for every
+    line, including two confirmed-wrong ones, rather than actually
+    re-deriving an answer. Blind to the current assignment, it's forced to
+    make an actual judgment instead of rubber-stamping one.
+
+    Not a reliable fix on its own: real testing on a 3-line exchange with a
+    genuinely wrong assignment got 2 of 3 lines right (Qwen2.5-3B-Instruct
+    and a 4-bit Qwen2.5-7B-Instruct scored the same, so this stays on the
+    3B model Stage A already loads rather than adding a heavier one for no
+    measured gain) - it's better than the structural heuristic finding
+    nothing to disagree with, not a guarantee of a fully corrected result.
+
+    Only called when there's more than one line (see adapt_story) - a single
+    line has nothing to disambiguate against, and it's already whatever
+    split_dialogue resolved (correctly, if there was any signal at all)."""
+    character_notes = "; ".join(f"{name} ({registry.get(name).description})" for name in characters if registry.get(name))
+    prompt = _DIALOGUE_REVIEW_PROMPT.format(character_notes=character_notes, lines=_format_dialogue_for_review(dialogue))
+    response = llm.generate(prompt, max_new_tokens=20 * len(dialogue))
+    corrections = parse_dialogue_review(response, len(dialogue), characters)
+    if not corrections:
+        return dialogue
+    return [
+        DialogueLine(speaker=corrections.get(i, line.speaker), text=line.text, kind=line.kind)
+        for i, line in enumerate(dialogue)
+    ]
+
+
 # camera-hint keyword fallback and CAPTION:/CAMERA: response parsing now
 # live in train_captioner.py (as CAMERA_HINTS / guess_camera_hint /
 # parse_caption_and_camera) - shared with Captioner.generate() so the
@@ -882,6 +984,8 @@ def adapt_story(
 
         chunk_doc = get_nlp()(chunk) if ('"' in chunk or _THOUGHT_RE.search(chunk)) else None
         dialogue = split_dialogue(chunk, characters, default_speaker=last_speaker, doc=chunk_doc)
+        if len(dialogue) > 1:
+            dialogue = review_dialogue_attribution(dialogue, characters, registry, llm)
         if characters:
             last_speaker = characters[-1]
         elif dialogue:
