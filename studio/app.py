@@ -291,7 +291,6 @@ def _model_is_downloaded(repo_id: str) -> bool:
                 snapshot = Path(snapshot_download(
                     repo_id,
                     cache_dir=str(cache_dir),
-                    allow_patterns=[required_file],
                     local_files_only=True,
                 ))
                 if (snapshot / required_file).is_file():
