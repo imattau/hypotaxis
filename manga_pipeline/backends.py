@@ -189,6 +189,31 @@ def _abstract_character_note(name: str | None, registry: CharacterRegistry | Non
     return f"{name} ({entry.description})" if entry else name
 
 
+def _split_by_abstractness(names: list[str], registry: CharacterRegistry | None) -> tuple[list[str], list[str]]:
+    """Splits a panel's tagged character names into (real/humanoid,
+    abstract/no-form) using the registry's is_abstract flag. A name with no
+    registry entry (or no registry at all) is treated as real, matching
+    prior behavior for stories that don't use the [no-form] convention.
+
+    generate_panel uses this so a panel tagging one real character alongside
+    one or more abstract ones - e.g. a scene naming both a human character
+    and a bodiless AI presence - resolves identity conditioning onto the
+    real character instead of falling into the "2+ names, ambiguous, skip
+    identity conditioning entirely" path that's meant for genuinely multiple
+    real characters. Before this split, a panel like that lost IP-Adapter
+    conditioning on its one real character (and, once pose-ControlNet is
+    enabled, got a fabricated second person standing in for what should be
+    an ambient glow, not a body - a real generation comparison showed
+    exactly that)."""
+    if registry is None:
+        return names, []
+    human, abstract = [], []
+    for name in names:
+        entry = registry.get(name)
+        (abstract if entry and entry.is_abstract else human).append(name)
+    return human, abstract
+
+
 class ImageBackend(ABC):
     def prepare_characters(
         self, story_id: str, registry: CharacterRegistry, style_prompt: str, force: bool = False
@@ -762,7 +787,12 @@ class DiffusersBackend(ImageBackend):
         generator = torch.Generator(device=self.device).manual_seed(seed)
         prompt = _build_prompt(style_prompt, panel, prop_registry)
 
-        char_name = self._resolve_target(panel.characters, _dominant_character(page))
+        human_characters, abstract_characters = _split_by_abstractness(panel.characters, registry)
+        # only resolve against the real names once there's more than one tag
+        # total - a lone abstract-only tag still resolves directly to it
+        # (len(panel.characters) == 1 below), same as before this split
+        resolve_from = human_characters if len(panel.characters) >= 2 else panel.characters
+        char_name = self._resolve_target(resolve_from, _dominant_character(page))
         char_entry = registry.get(char_name) if (registry and char_name) else None
         if char_entry and char_entry.is_abstract:
             # text-anchored like a prop, never image-conditioned - see
@@ -775,6 +805,17 @@ class DiffusersBackend(ImageBackend):
         else:
             char_image = self._reference_image(char_name, story_id, style_prompt, registry) if (registry and char_name) else None
             char_scale = self.cfg.identity_adapter_scale if char_image is not None else 0.0
+
+        # any OTHER abstract character also tagged on this panel (e.g. Jules
+        # resolved above as the one real body in frame, Nova also tagged but
+        # present only as her ambient glow) still gets text-anchored, same
+        # mechanism as the single-abstract-character branch above
+        for extra_name in abstract_characters:
+            if extra_name == char_name:
+                continue
+            extra_note = _abstract_character_note(extra_name, registry)
+            if extra_note:
+                prompt = f"{prompt}, featuring {extra_note}"
 
         loc_name = self._resolve_target(panel.locations, _dominant_location(page))
         loc_image = (
@@ -798,14 +839,18 @@ class DiffusersBackend(ImageBackend):
 
         if (
             self.cfg.use_pose_controlnet
-            and len(panel.characters) >= 2
+            and len(human_characters) >= 2
             and panel.camera_hint not in _POSE_CONTROLNET_INCOMPATIBLE_CAMERA_HINTS
         ):
-            # char_name is already None here (_resolve_target skips identity
-            # conditioning for 2+ characters) - this path replaces that gap
+            # counts human_characters, not panel.characters - a panel
+            # tagging one real character plus one or more abstract/no-form
+            # ones (see _split_by_abstractness) has only one real body to
+            # place, not two, even though it names two "characters". char_name
+            # is None here because len(human_characters) >= 2 is genuine
+            # ambiguity among real characters - this path replaces that gap
             # with a structural headcount/position guarantee instead, see
             # _generate_with_pose_controlnet
-            image = self._generate_with_pose_controlnet(prompt, len(panel.characters), gen_width, gen_height, generator)
+            image = self._generate_with_pose_controlnet(prompt, len(human_characters), gen_width, gen_height, generator)
         else:
             result = self._base_pipe(
                 prompt=prompt,
