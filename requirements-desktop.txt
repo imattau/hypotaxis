@@ -1,4 +1,8 @@
 -r requirements-studio.txt
 pillow
 pywebview2
+# pywebview2 needs a concrete Linux GUI backend; PySide6 is bundled into the
+# AppImage so it does not depend on a system Python installation.
+qtpy
+PySide6
 pyinstaller

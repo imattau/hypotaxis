@@ -5,7 +5,11 @@ from PyInstaller.utils.hooks import collect_submodules
 
 
 root = Path(SPECPATH)
-hiddenimports = collect_submodules("studio")
+hiddenimports = (
+    collect_submodules("studio")
+    + collect_submodules("webview")
+    + collect_submodules("qtpy")
+)
 datas = [
     (str(root / "studio" / "static"), "studio/static"),
     (str(root / "stories"), "stories"),
